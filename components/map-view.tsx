@@ -1,3 +1,5 @@
+'use client';
+
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 
@@ -180,7 +182,7 @@ export const LOCATION_COORDS: Record<string, [number, number]> = {
   "Shopping Center": [37.448, -122.156],
 };
 
-export function getRoutePoints(from: string, to: string): [number, number][] {
+export default function getRoutePoints(from: string, to: string): [number, number][] {
   const start = LOCATION_COORDS[from];
   const end = LOCATION_COORDS[to];
   if (!start || !end) return [];

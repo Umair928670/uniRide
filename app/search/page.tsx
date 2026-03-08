@@ -1,14 +1,18 @@
 'use client';
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { ArrowLeft, SlidersHorizontal, Search, X, MapPin } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import { RideCard } from "@/components/ride-card";
-import { MapView } from "@/components/map-view";
-import router from "next/dist/shared/lib/router/router";
+import { LOCATION_COORDS } from "@/components/locations";
+import dynamic from "next/dynamic";
 
-export default function SearchPage() {
+const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView || mod.default), { 
+  ssr: false 
+});
+
+function SearchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { availableRides, isDarkMode } = useApp();
@@ -196,5 +200,17 @@ export default function SearchPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        Loading search...
+      </div>
+    }>
+      <SearchContent />
+    </Suspense>
   );
 }

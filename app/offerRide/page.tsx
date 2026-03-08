@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from "react";
+import dynamic from "next/dynamic";
 import {
   MapPin,
   Calendar,
@@ -18,8 +19,12 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useApp } from "@/components/app-context";
-import { MapView, LOCATION_COORDS } from "@/components/map-view";
 import { useRouter } from "next/navigation";
+import { LOCATION_COORDS } from "@/components/locations";
+
+const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView), { 
+  ssr: false 
+});
 
 const SUGGESTED_LOCATIONS = Object.keys(LOCATION_COORDS);
 

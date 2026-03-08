@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import {
   ArrowLeft,
   User,
@@ -31,7 +31,7 @@ import { useApp, VehicleInfo } from "@/components/app-context";
 
 type Section = "main" | "edit-profile" | "vehicle" | "notification-prefs" | "privacy" | "language" | "delete-account";
 
-export default function SettingsPage() {
+function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, settings, activeRole, updateProfile, updateVehicle, updateSettings, addNotification, logout } = useApp();
@@ -557,4 +557,17 @@ function InputField({ label, value, onChange, placeholder, disabled, hint }: { l
 
 function Divider() {
   return <div className="h-px bg-border mx-4" />;
+}
+
+export default function SettingsPage() {
+  return (
+    // Wrap the content in Suspense so Next.js doesn't crash during the build
+    <Suspense fallback={
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        Loading settings...
+      </div>
+    }>
+      <SettingsContent />
+    </Suspense>
+  );
 }
