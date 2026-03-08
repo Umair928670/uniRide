@@ -1,4 +1,4 @@
-
+import { ClerkProvider } from '@clerk/nextjs';
 import { AppProvider } from "@/components/app-context";
 import { TopBar } from "@/components/top-bar";
 import { BottomNav } from "@/components/bottom-nav";
@@ -10,6 +10,7 @@ import "./styles/index.css";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
+    <ClerkProvider>
     <html lang="en">
       <body>
         <AppProvider>
@@ -24,5 +25,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </AppProvider>
       </body>
     </html>
+    </ClerkProvider>
   );
 }
