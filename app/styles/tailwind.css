@@ -1,0 +1,8 @@
+/* Enable default Tailwind scanning */
+@import 'tailwindcss';
+
+/* Tell Tailwind exactly where your files live now */
+@source '../../app';
+@source '../../components';
+
+@import 'tw-animate-css';
