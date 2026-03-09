@@ -288,10 +288,10 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
       const newRide: Ride = {
         ...rideData,
         id: "offer-" + Date.now(),
-        driverName: user.firstName + " " + user.lastName,
-        driverAvatar: user.photo || "",
-        rating: user.rating,
-        verified: user.verified,
+        driverName: user?.firstName + " " + user?.lastName,
+        driverAvatar: user?.photo || "/default-avatar.png",
+        rating: user?.rating,
+        verified: user?.verified,
         status: "available",
       };
       setOfferedRides((prev) => [newRide, ...prev]);

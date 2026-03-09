@@ -30,7 +30,7 @@ export default function ProfilePage() {
         <div className="pt-4 pb-6 text-center">
           <div className="relative w-24 h-24 mx-auto mb-4">
             <ImageWithFallback
-              src={user.photo || "/default-avatar.png"}
+              src={user?.photo || "/default-avatar.png"}
               alt="Profile"
               className="w-full h-full rounded-3xl object-cover shadow-lg"
             />
@@ -38,15 +38,15 @@ export default function ProfilePage() {
               <span className="text-white text-[12px] font-bold">✓</span>
             </div>
           </div>
-          <h2>{user.firstName} {user.lastName}</h2>
+          <h2>{user?.firstName} {user?.lastName}</h2>
           <div className="flex items-center justify-center gap-1.5 mt-1">
             <Shield className="w-4 h-4 text-[#00C9B1]" />
             <span className="text-[13px] text-[#00C9B1]">Verified Student</span>
           </div>
           <p className="text-muted-foreground text-[13px] mt-1">
-            {user.university} · {user.department}
+            {user?.university} · {user?.department}
           </p>
-          <p className="text-muted-foreground text-[12px] mt-0.5">{user.email}</p>
+          <p className="text-muted-foreground text-[12px] mt-0.5">{user?.email}</p>
         </div>
 
         {/* Role Switcher */}
@@ -91,7 +91,7 @@ export default function ProfilePage() {
             <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-[#00C9B1]/10">
               <Car className="w-4 h-4 text-[#00C9B1]" />
               <span className="text-[12px] text-foreground">
-                {user.vehicleInfo.color} {user.vehicleInfo.make} {user.vehicleInfo.model} · {user.vehicleInfo.licensePlate}
+                {user?.vehicleInfo?.color} {user?.vehicleInfo?.make} {user?.vehicleInfo?.model} · {user?.vehicleInfo?.licensePlate}
               </span>
             </div>
           )}

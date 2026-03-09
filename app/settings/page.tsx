@@ -65,13 +65,13 @@ function SettingsContent() {
           <div className="px-4 py-3 border-b border-border">
             <p className="text-[12px] text-muted-foreground font-medium uppercase tracking-wide">Account</p>
           </div>
-          <SettingsItem icon={<User className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />} label="Edit Profile" subtitle={user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : ""} onClick={() => setSection("edit-profile")} />
+          <SettingsItem icon={<User className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />} label="Edit Profile" subtitle={user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : ""} onClick={() => setSection("edit-profile")} />
           <Divider />
           <SettingsItem
             icon={<Car className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />}
             label="Vehicle Information"
             subtitle={
-              user.vehicleInfo
+              user?.vehicleInfo
                 ? `${user.vehicleInfo.color} ${user.vehicleInfo.make} ${user.vehicleInfo.model}`
                 : "Not set up"
             }
@@ -109,11 +109,11 @@ function SettingsContent() {
 /* ============ Sub-screens ============ */
 
 function EditProfile({ user, onSave, onBack, addNotification }: { user: any; onSave: (u: any) => void; onBack: () => void; addNotification: (t: any, m: string) => void }) {
-  const [name, setName] = useState(user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : "");
-  const [phone, setPhone] = useState(user.phone);
-  const [bio, setBio] = useState(user.bio);
-  const [department, setDepartment] = useState(user.department);
-  const [photo, setPhoto] = useState<string | null>(user.photo || user.avatar || null);
+  const [name, setName] = useState(user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : "");
+  const [phone, setPhone] = useState(user?.phone);
+  const [bio, setBio] = useState(user?.bio);
+  const [department, setDepartment] = useState(user?.department);
+  const [photo, setPhoto] = useState<string | null>(user?.photo || user?.avatar || null);
   const [isSaving, setIsSaving] = useState(false);
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -136,8 +136,8 @@ function EditProfile({ user, onSave, onBack, addNotification }: { user: any; onS
       const lastName = rest.join(" ");
 
       const dbUpdateData = {
-        firstName: firstName || user.firstName,
-        lastName: lastName || user.lastName,
+        firstName: firstName || user?.firstName,
+        lastName: lastName || user?.lastName,
         phone,
         bio,
         department,

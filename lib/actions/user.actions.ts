@@ -6,14 +6,15 @@ import User from "../models/user.model";
 import { revalidatePath } from "next/cache";
 
 export async function getLoggedInUser() {
-  try {
-    // 1. Get the current logged-in user's ID from Clerk
+
+   // 1. Get the current logged-in user's ID from Clerk
     const { userId } = await auth();
 
     if (!userId) {
       return null; // No one is logged in
     }
-
+    
+  try {
     // 2. Connect to MongoDB securely
     await connectToDatabase();
 

@@ -63,7 +63,9 @@ export function TopBar({ transparent = false }: TopBarProps) {
           >
             <Avatar className="w-full h-full">
                 <AvatarImage
-                  src={user.photo}
+                  src={user?.photo || "/default-avatar.png"
+                    
+                  }
                   alt="Profile"
                   className="object-cover"
                 />
