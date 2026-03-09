@@ -1,5 +1,5 @@
 'use client';
-
+import { updateUser } from "@/lib/actions/user.actions";
 import { Suspense, useState } from "react";
 import {
   ArrowLeft,
@@ -8,11 +8,13 @@ import {
   Bell,
   Lock,
   Globe,
+  Loader2,
   ChevronRight,
   Save,
   Shield,
   Eye,
   EyeOff,
+  Edit2,
   Trash2,
   X,
   Check,
@@ -63,7 +65,7 @@ function SettingsContent() {
           <div className="px-4 py-3 border-b border-border">
             <p className="text-[12px] text-muted-foreground font-medium uppercase tracking-wide">Account</p>
           </div>
-          <SettingsItem icon={<User className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />} label="Edit Profile" subtitle={user.name} onClick={() => setSection("edit-profile")} />
+          <SettingsItem icon={<User className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />} label="Edit Profile" subtitle={user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : ""} onClick={() => setSection("edit-profile")} />
           <Divider />
           <SettingsItem
             icon={<Car className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />}
@@ -107,22 +109,92 @@ function SettingsContent() {
 /* ============ Sub-screens ============ */
 
 function EditProfile({ user, onSave, onBack, addNotification }: { user: any; onSave: (u: any) => void; onBack: () => void; addNotification: (t: any, m: string) => void }) {
-  const [name, setName] = useState(user.name);
+  const [name, setName] = useState(user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : "");
   const [phone, setPhone] = useState(user.phone);
   const [bio, setBio] = useState(user.bio);
   const [department, setDepartment] = useState(user.department);
+  const [photo, setPhoto] = useState<string | null>(user.photo || user.avatar || null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleSave = () => {
-    onSave({ name, phone, bio, department });
-    addNotification("success", "Profile updated successfully!");
-    onBack();
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      addNotification("warning", "File too large. Max 5MB allowed.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      // Split the single name input into first and last name for MongoDB
+      const [firstName, ...rest] = name.trim().split(" ");
+      const lastName = rest.join(" ");
+
+      const dbUpdateData = {
+        firstName: firstName || user.firstName,
+        lastName: lastName || user.lastName,
+        phone,
+        bio,
+        department,
+        photo
+      };
+
+      // 1. Securely save to MongoDB in the background
+      await updateUser(dbUpdateData);
+
+      // 2. Instantly update the local UI Context
+      onSave({ name, phone, bio, department, photo });
+
+      addNotification("success", "Profile updated successfully!");
+      onBack();
+    } catch (error) {
+      addNotification("error", "Failed to update profile to database.");
+    } finally {
+      setIsSaving(false); // Turn off spinner if it fails
+    }
   };
 
   return (
     <SubPage title="Edit Profile" onBack={onBack}>
       <div className="space-y-4">
+        {/* === Profile Picture Upload UI === */}
+        <div className="flex flex-col items-center mb-6 pt-2">
+          <div className="relative">
+            {/* The Avatar Circle */}
+            <div className="w-24 h-24 rounded-full overflow-hidden bg-muted border-4 border-background shadow-sm flex items-center justify-center">
+              {photo ? (
+                <img src={photo} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-3xl font-bold text-muted-foreground">
+                  {name ? name.charAt(0).toUpperCase() : "U"}
+                </span>
+              )}
+            </div>
+            
+            {/* The Camera Button Overlay */}
+            <label 
+              className="absolute bottom-0 right-0 w-8 h-8 bg-[#00C9B1] text-white rounded-full flex items-center justify-center cursor-pointer shadow-md hover:bg-[#00C9B1]/90 transition-colors border-2 border-background" 
+              title="Change Photo"
+            >
+              <Camera className="w-4 h-4" />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoUpload}
+              />
+            </label>
+          </div>
+          <p className="text-[12px] text-muted-foreground mt-2">Tap camera to change picture</p>
+        </div>
+        {/* ================================= */}
         <InputField label="Full Name" value={name} onChange={setName} />
-        <InputField label="Email" value={user.email} onChange={() => {}} disabled hint="Email cannot be changed" />
+        <InputField label="Email" value={user.email} onChange={() => { }} disabled hint="Email cannot be changed" />
         <InputField label="Phone" value={phone} onChange={setPhone} placeholder="+1 (555) 000-0000" />
         <InputField label="Department" value={department} onChange={setDepartment} />
         <div>
@@ -136,8 +208,20 @@ function EditProfile({ user, onSave, onBack, addNotification }: { user: any; onS
           />
           <p className="text-[11px] text-muted-foreground text-right mt-1">{bio.length}/200</p>
         </div>
-        <button onClick={handleSave} className="w-full py-3.5 rounded-2xl bg-[#1A3C6E] text-white font-semibold flex items-center justify-center gap-2 hover:bg-[#1A3C6E]/90 transition-colors">
-          <Save className="w-5 h-5" /> Save Changes
+        <button 
+          onClick={handleSave} 
+          disabled={isSaving}
+          className="w-full py-3.5 rounded-2xl bg-[#1A3C6E] text-white font-semibold flex items-center justify-center gap-2 hover:bg-[#1A3C6E]/90 transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+        >
+          {isSaving ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" /> Saving...
+            </>
+          ) : (
+            <>
+              <Save className="w-5 h-5" /> Save Changes
+            </>
+          )}
         </button>
       </div>
     </SubPage>
@@ -153,6 +237,7 @@ function VehicleSettings({ vehicle, onSave, onBack, addNotification }: { vehicle
   const [licensePlate, setLicensePlate] = useState(vehicle?.licensePlate || "");
   const [licenseImage, setLicenseImage] = useState<string | null>(user.driverLicenseImage);
   const [vehiclePic, setVehiclePic] = useState<string | null>(user.vehiclePicture);
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleFileUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -169,34 +254,49 @@ function VehicleSettings({ vehicle, onSave, onBack, addNotification }: { vehicle
     reader.readAsDataURL(file);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!licenseImage || !vehiclePic) {
       addNotification("warning", "Please upload both driver license and vehicle picture to save.");
       return;
     }
-    onSave({ make, model, year, color, licensePlate });
-    updateProfile({ driverLicenseImage: licenseImage, vehiclePicture: vehiclePic });
-    addNotification("success", "Vehicle information & documents updated!");
-    onBack();
+
+    setIsSaving(true);
+    try {
+      const vehicleInfo = { make, model, year, color, licensePlate };
+
+      const dbUpdateData = {
+        vehicleInfo,
+        driverLicenseImage: licenseImage,
+        vehiclePicture: vehiclePic,
+        isDriverVerified: true // You can set this to false if you want an admin to approve it later!
+      };
+
+      // 1. Securely save to MongoDB
+      await updateUser(dbUpdateData);
+
+      // 2. Instantly update the local UI Context
+      onSave(vehicleInfo);
+      updateProfile({ driverLicenseImage: licenseImage, vehiclePicture: vehiclePic });
+
+      addNotification("success", "Vehicle information & documents updated!");
+      onBack();
+    } catch (error) {
+      addNotification("error", "Failed to save vehicle info to database.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const isComplete = !!(make && model && year && color && licensePlate && licenseImage && vehiclePic);
 
   return (
     <SubPage title="Vehicle Information" onBack={onBack}>
-      <div className="bg-[#00C9B1]/10 rounded-2xl p-4 mb-4 flex items-start gap-3">
-        <Shield className="w-5 h-5 text-[#00C9B1] mt-0.5 shrink-0" />
-        <p className="text-[13px] text-foreground">
-          Driver license and vehicle picture are <span className="font-semibold">mandatory</span> to offer rides. This helps verify your identity and builds trust with passengers.
-        </p>
-      </div>
 
       {/* Verification Status */}
-      <div className={`rounded-2xl p-4 mb-4 flex items-center gap-3 ${
-        isComplete
+      <div className={`rounded-2xl p-4 mb-4 flex items-center gap-3 ${isComplete
           ? "bg-green-500/10 border border-green-500/20"
           : "bg-amber-500/10 border border-amber-500/20"
-      }`}>
+        }`}>
         {isComplete ? (
           <CheckCircle className="w-5 h-5 text-green-500 shrink-0" />
         ) : (
@@ -235,19 +335,29 @@ function VehicleSettings({ vehicle, onSave, onBack, addNotification }: { vehicle
               Driver License <span className="text-red-500">*</span>
             </label>
             {licenseImage ? (
-              <div className="relative rounded-2xl overflow-hidden border border-border">
-                <img src={licenseImage} alt="Driver License" className="w-full h-40 object-cover" />
-                <div className="absolute top-2 right-2 flex gap-2">
-                  <button
-                    onClick={() => setLicenseImage(null)}
-                    className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center shadow-lg hover:bg-red-600 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+              <div className="flex items-center justify-between p-4 rounded-2xl bg-green-500/10 border border-green-500/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
+                  </div>
+                  <div>
+                    <p className="text-[14px] font-semibold text-green-700 dark:text-green-400">Document Uploaded</p>
+                    <p className="text-[12px] text-green-600/80 dark:text-green-400/80">Verified and stored securely</p>
+                  </div>
                 </div>
-                <div className="absolute bottom-2 left-2 bg-green-500 text-white px-3 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3" /> Uploaded
-                </div>
+                {/* Replaced the X button with a functioning Edit file upload button */}
+                <label
+                  className="w-8 h-8 rounded-full bg-white dark:bg-[#1C2333] flex items-center justify-center text-muted-foreground hover:text-[#00C9B1] hover:bg-[#00C9B1]/10 shadow-sm transition-colors cursor-pointer"
+                  title="Update document"
+                >
+                  <Edit2 className="w-4 h-4" />
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(e, setLicenseImage)}
+                  />
+                </label>
               </div>
             ) : (
               <label className="flex flex-col items-center justify-center gap-2 py-8 rounded-2xl border-2 border-dashed border-border hover:border-[#00C9B1] transition-colors cursor-pointer bg-[#F5F7FA] dark:bg-[#1C2333]">
@@ -275,19 +385,29 @@ function VehicleSettings({ vehicle, onSave, onBack, addNotification }: { vehicle
               Vehicle Picture <span className="text-red-500">*</span>
             </label>
             {vehiclePic ? (
-              <div className="relative rounded-2xl overflow-hidden border border-border">
-                <img src={vehiclePic} alt="Vehicle" className="w-full h-40 object-cover" />
-                <div className="absolute top-2 right-2 flex gap-2">
-                  <button
-                    onClick={() => setVehiclePic(null)}
-                    className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center shadow-lg hover:bg-red-600 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+              <div className="flex items-center justify-between p-4 rounded-2xl bg-green-500/10 border border-green-500/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
+                    <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
+                  </div>
+                  <div>
+                    <p className="text-[14px] font-semibold text-green-700 dark:text-green-400">Photo Uploaded</p>
+                    <p className="text-[12px] text-green-600/80 dark:text-green-400/80">Vehicle picture verified</p>
+                  </div>
                 </div>
-                <div className="absolute bottom-2 left-2 bg-green-500 text-white px-3 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3" /> Uploaded
-                </div>
+                {/* Replaced the X button with an Edit button */}
+                <label
+                  className="w-8 h-8 rounded-full bg-white dark:bg-[#1C2333] flex items-center justify-center text-muted-foreground hover:text-[#00C9B1] hover:bg-[#00C9B1]/10 shadow-sm transition-colors cursor-pointer"
+                  title="Update photo"
+                >
+                  <Edit2 className="w-4 h-4" />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(e, setVehiclePic)}
+                  />
+                </label>
               </div>
             ) : (
               <label className="flex flex-col items-center justify-center gap-2 py-8 rounded-2xl border-2 border-dashed border-border hover:border-[#00C9B1] transition-colors cursor-pointer bg-[#F5F7FA] dark:bg-[#1C2333]">
@@ -311,10 +431,18 @@ function VehicleSettings({ vehicle, onSave, onBack, addNotification }: { vehicle
 
         <button
           onClick={handleSave}
-          disabled={!isComplete}
+          disabled={!isComplete || isSaving}
           className="w-full py-3.5 rounded-2xl bg-[#1A3C6E] text-white font-semibold flex items-center justify-center gap-2 hover:bg-[#1A3C6E]/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <Save className="w-5 h-5" /> Save Vehicle Info
+          {isSaving ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" /> Saving...
+            </>
+          ) : (
+            <>
+              <Save className="w-5 h-5" /> Save Vehicle Info
+            </>
+          )}
         </button>
       </div>
     </SubPage>
@@ -504,7 +632,7 @@ function SettingsItem({ icon, label, subtitle, labelClass = "", onClick, badge }
               <span className="px-2 py-0.5 rounded-full bg-[#00C9B1]/10 text-[#00C9B1] text-[10px] font-semibold">{badge}</span>
             )}
           </div>
-          {subtitle && <p className="text-[12px] text-muted-foreground truncate">{subtitle}</p>}
+          {subtitle && <p className="text-[12px] text-muted-foreground truncate text-start">{subtitle}</p>}
         </div>
       </div>
       <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -524,14 +652,12 @@ function ToggleItem({ icon, label, subtitle, value, onChange }: { icon: React.Re
       </div>
       <button
         onClick={() => onChange(!value)}
-        className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ml-3 ${
-          value ? "bg-[#00C9B1]" : "bg-muted-foreground/30"
-        }`}
+        className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ml-3 ${value ? "bg-[#00C9B1]" : "bg-muted-foreground/30"
+          }`}
       >
         <div
-          className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-1 transition-all ${
-            value ? "right-1" : "left-1"
-          }`}
+          className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-1 transition-all ${value ? "right-1" : "left-1"
+            }`}
         />
       </button>
     </div>

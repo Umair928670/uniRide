@@ -13,10 +13,18 @@ export interface VehicleInfo {
   licensePlate: string;
 }
 
+interface AppProviderProps {
+  children: ReactNode;
+  initialUser?: any; // We'll pass the MongoDB user here
+}
+
 export interface UserProfile {
-  name: string;
+  _id?: string;
+  clerkId?: string;  
+  firstName?: string;
+  lastName?: string;
+  photo?: string;
   email: string;
-  avatar: string;
   university: string;
   department: string;
   verified: boolean;
@@ -28,7 +36,10 @@ export interface UserProfile {
   vehicleInfo: VehicleInfo | null;
   driverLicenseImage: string | null;
   vehiclePicture: string | null;
+  isDriverVerified?: boolean;
 }
+
+
 
 export interface Notification {
   id: string;
@@ -93,29 +104,6 @@ interface AppState {
   clearAllAppNotifications: () => void;
   deleteAppNotification: (id: string) => void;
 }
-
-const defaultUser: UserProfile = {
-  name: "Alex Johnson",
-  email: "alex.johnson@stanford.edu",
-  avatar: AVATARS.driver1,
-  university: "Stanford University",
-  department: "Computer Science",
-  verified: true,
-  ridesTaken: 24,
-  ridesOffered: 12,
-  rating: 4.9,
-  phone: "+1 (650) 555-0147",
-  bio: "CS grad student who loves carpooling! Always happy to share rides to campus.",
-  vehicleInfo: {
-    make: "Toyota",
-    model: "Corolla",
-    year: "2022",
-    color: "White",
-    licensePlate: "7ABC123",
-  },
-  driverLicenseImage: null,
-  vehiclePicture: null,
-};
 
 const defaultSettings: UserSettings = {
   pushNotifications: true,
@@ -194,9 +182,9 @@ const INITIAL_APP_NOTIFICATIONS: AppNotification[] = [
 
 const AppContext = createContext<AppState | null>(null);
 
-export function AppProvider({ children }: { children: ReactNode }) {
+export function AppProvider({ children, initialUser }: AppProviderProps) {
   const [isLoggedIn, setIsLoggedIn] = useState(true);
-  const [user, setUser] = useState<UserProfile>(defaultUser);
+  const [user, setUser] = useState<UserProfile>(initialUser);
   const [activeRole, setActiveRole] = useState<UserRole>("both");
   const [availableRides, setAvailableRides] = useState<Ride[]>(MOCK_RIDES);
   const [myUpcomingRides, setMyUpcomingRides] = useState<Ride[]>([]);
@@ -248,8 +236,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(() => {
     setIsLoggedIn(true);
-    addNotification("success", "Welcome back, " + user.name + "!");
-  }, [user.name, addNotification]);
+    addNotification("success", "Welcome back, " + user?.lastName + "!");
+  }, [user?.lastName, addNotification]);
 
   const logout = useCallback(() => {
     setIsLoggedIn(false);
@@ -300,8 +288,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const newRide: Ride = {
         ...rideData,
         id: "offer-" + Date.now(),
-        driverName: user.name,
-        driverAvatar: user.avatar,
+        driverName: user.firstName + " " + user.lastName,
+        driverAvatar: user.photo || "",
         rating: user.rating,
         verified: user.verified,
         status: "available",
@@ -349,7 +337,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isLoggedIn,
         user,
         activeRole,
-        isDriverVerified: !!(user.driverLicenseImage && user.vehiclePicture && user.vehicleInfo),
+        isDriverVerified: !!(user?.driverLicenseImage && user?.vehiclePicture && user?.vehicleInfo),
         availableRides,
         myUpcomingRides,
         myPastRides,

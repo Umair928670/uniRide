@@ -4,6 +4,7 @@ import { Bell, GraduationCap } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
 import { useApp } from "./app-context";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 interface TopBarProps {
   transparent?: boolean;
@@ -18,23 +19,22 @@ export function TopBar({ transparent = false }: TopBarProps) {
     "/notifications",
     "/settings",
     "/help",
-    "/search", 
+    "/search",
     "/offer-ride"
   ];
 
   if (hiddenPaths.includes(pathname)) {
     return null;
   }
-  
+
   const unreadCount = appNotifications.filter((n) => !n.read).length;
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-50 ${
-        transparent
+      className={`fixed top-0 left-0 right-0 z-50 ${transparent
           ? "bg-white/70 dark:bg-[#0D1117]/70 backdrop-blur-xl"
           : "bg-card/95 backdrop-blur-lg border-b border-border"
-      }`}
+        }`}
     >
       <div className="max-w-lg mx-auto flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
@@ -59,13 +59,15 @@ export function TopBar({ transparent = false }: TopBarProps) {
           </button>
           <button
             onClick={() => router.push("/profile")}
-            className="w-8 h-8 rounded-full overflow-hidden ring-2 ring-[#00C9B1]/30"
+            className="w-8 h-8 rounded-full overflow-hidden ring-2 ring-[#00C9B1]/30 flex-shrink-0"
           >
-            <ImageWithFallback
-              src={user.avatar}
-              alt="Profile"
-              className="w-full h-full object-cover"
-            />
+            <Avatar className="w-full h-full">
+                <AvatarImage
+                  src={user.photo}
+                  alt="Profile"
+                  className="object-cover"
+                />
+            </Avatar>
           </button>
         </div>
       </div>

@@ -4,8 +4,7 @@ import { Star, Car, Settings, LogOut, Moon, Sun, ChevronRight, Shield, Award, Be
 import { useRouter } from "next/navigation";
 import { useApp, UserRole } from "@/components/app-context";
 import { ImageWithFallback } from "@/components/figma/ImageWithFallback";
-// import router from "next/dist/shared/lib/router/router";
-// import router from "next/dist/shared/lib/router/router";
+import { useClerk } from "@clerk/nextjs";
 
 const ROLE_OPTIONS: { key: UserRole; label: string; icon: typeof Car; description: string }[] = [
   { key: "passenger", label: "Passenger", icon: Users, description: "Find & book rides" },
@@ -15,14 +14,14 @@ const ROLE_OPTIONS: { key: UserRole; label: string; icon: typeof Car; descriptio
 
 export default function ProfilePage() {
   const router = useRouter();
+  const { signOut } = useClerk();
   const { user, activeRole, isDarkMode, toggleDarkMode, logout, switchRole, appNotifications } = useApp();
 
-  const unreadCount = appNotifications.filter((n) => !n.read).length;
+  if (!user) {
+    return <div className="p-8 text-center">Loading profile...</div>;
+  }
 
-  const handleLogout = () => {
-    logout();
-    router.push("/login");
-  };
+  const unreadCount = appNotifications.filter((n) => !n.read).length;
 
   return (
     <div className="min-h-full bg-background pt-16 pb-24">
@@ -31,7 +30,7 @@ export default function ProfilePage() {
         <div className="pt-4 pb-6 text-center">
           <div className="relative w-24 h-24 mx-auto mb-4">
             <ImageWithFallback
-              src={user.avatar}
+              src={user.photo || "/default-avatar.png"}
               alt="Profile"
               className="w-full h-full rounded-3xl object-cover shadow-lg"
             />
@@ -39,7 +38,7 @@ export default function ProfilePage() {
               <span className="text-white text-[12px] font-bold">✓</span>
             </div>
           </div>
-          <h2>{user.name}</h2>
+          <h2>{user.firstName} {user.lastName}</h2>
           <div className="flex items-center justify-center gap-1.5 mt-1">
             <Shield className="w-4 h-4 text-[#00C9B1]" />
             <span className="text-[13px] text-[#00C9B1]">Verified Student</span>
@@ -185,7 +184,7 @@ export default function ProfilePage() {
             icon={<LogOut className="w-5 h-5 text-red-500" />}
             label="Log Out"
             labelClass="text-red-500"
-            onClick={handleLogout}
+            onClick={() => signOut({ redirectUrl: '/' })}
           />
         </div>
 
