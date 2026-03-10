@@ -12,7 +12,7 @@ const UserSchema = new Schema({
   phone: { type: String, default: "" },
   bio: { type: String, default: "" },
   university: { type: String, default: "CUST" },
-  department: { type: String, default: "", enum: ["CS", "SE", "BBA", "AI", "MATH", "PHYS", "CHEM", "ENG", "BIO"] },
+  department: { type: String, default: ""},
   
   // --- App Statistics ---
   ridesTaken: { type: Number, default: 0 },
