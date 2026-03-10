@@ -165,9 +165,9 @@ export default function OfferRidePage() {
 
   // Driver verification gate
   if (!isDriverVerified) {
-    const missingLicense = !user.driverLicenseImage;
-    const missingVehiclePic = !user.vehiclePicture;
-    const missingVehicleInfo = !user.vehicleInfo;
+    const missingLicense = !user?.driverLicenseImage;
+    const missingVehiclePic = !user?.vehiclePicture;
+    const missingVehicleInfo = !user?.vehicleInfo;
 
     return (
       <div className="min-h-full bg-background pb-28">
