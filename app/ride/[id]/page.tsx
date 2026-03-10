@@ -3,17 +3,18 @@
 import Pusher from "pusher-js";
 import { broadcastLocation } from "@/lib/actions/location.actions";
 import { useState, useMemo, useEffect } from "react";
-import { ArrowLeft, Star, MapPin, Clock, Users, MessageCircle, Shield, Phone, CheckCircle, Loader2 } from "lucide-react";
+import { ArrowLeft, Star, MapPin, Clock, Users, MessageCircle, Shield, Check, X, Phone, CheckCircle, Loader2 } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import { ImageWithFallback } from "@/components/figma/ImageWithFallback";
 import { MapView } from "@/components/map-view";
 import { getRideById, bookRide, updateRideStatus } from "@/lib/actions/ride.actions";
+import { createRideRequest, checkMyRequestStatus, getPendingRequestsForRide, respondToRequest } from "@/lib/actions/request.actions";
 
 export default function RideDetailPage() {
   const router = useRouter();
   const { id } = useParams();
-  
+
   // 1. Pulled liveLocation natively from useApp so the driver can see their own car!
   const { user, isDarkMode, addNotification, startTracking, stopTracking, isBroadcasting, liveLocation } = useApp();
 
@@ -22,7 +23,8 @@ export default function RideDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isBooking, setIsBooking] = useState(false);
   const [isAlreadyBooked, setIsAlreadyBooked] = useState(false);
-  
+  const [requestStatus, setRequestStatus] = useState<string | null>(null);
+
   // --- Live Location States ---
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number, lng: number } | null>(null);
@@ -32,6 +34,8 @@ export default function RideDetailPage() {
   const [showChat, setShowChat] = useState(false);
   const [chatMessage, setChatMessage] = useState("");
   const [chatMessages, setChatMessages] = useState<{ sender: string; text: string; time: string }[]>([]);
+
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
 
   // 1. Fetch the exact ride from MongoDB on load
   useEffect(() => {
@@ -57,8 +61,15 @@ export default function RideDetailPage() {
         };
         setRide(formattedRide);
 
-        if (user && dbRide.passengers.includes(user._id)) {
-          setIsAlreadyBooked(true);
+        if (user && user._id && dbRide.driver?._id.toString() === user._id.toString()) {
+          const reqs = await getPendingRequestsForRide(dbRide._id);
+          setPendingRequests(reqs);
+        }
+
+
+        const status = await checkMyRequestStatus(dbRide._id);
+        if (status) {
+          setRequestStatus(status);
         }
       } catch (error) {
         console.error("Failed to load ride", error);
@@ -72,50 +83,90 @@ export default function RideDetailPage() {
 
   const isOwnRide = user && ride && (user._id === ride.driverId);
 
-  // 2. Handle the Real Database Booking
   const handleRequest = async () => {
     if (ride.seatsLeft <= 0) {
       addNotification("warning", "No seats available for this ride.");
       return;
     }
+
     setIsBooking(true);
     try {
-      await bookRide(ride.id); 
-      setIsAlreadyBooked(true);
-      setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft - 1 }));
-      addNotification("success", "Ride requested successfully!");
+      // Instead of bookRide(), we call our new pending request function
+      await createRideRequest(ride.id, ride.driverId);
+
+      // Instantly update UI to show pending!
+      setRequestStatus("pending");
+      addNotification("success", "Request sent to the driver for approval!");
+
+      // Note: We DO NOT reduce seatsLeft here anymore. That happens later if the driver accepts!
+
     } catch (error: any) {
-      addNotification("warning", error.message || "Failed to book ride.");
+      addNotification("warning", error.message || "Failed to send request.");
     } finally {
       setIsBooking(false);
     }
   };
 
-  // 1. THE LISTENER: Hear incoming GPS updates from Pusher
+ // THE LISTENER: Hear incoming GPS and Status updates from Pusher
   useEffect(() => {
-    if (!ride?.id || (!isOwnRide && !isAlreadyBooked)) return;
+    // If we don't have the ride ID, or if we aren't part of the ride/pending, don't connect
+    if (!ride?.id || (!isOwnRide && !isAlreadyBooked && requestStatus !== "pending")) return;
+    if (!process.env.NEXT_PUBLIC_PUSHER_KEY || !process.env.NEXT_PUBLIC_PUSHER_CLUSTER) return; 
 
-    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
-      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
+    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY, {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER,
     });
+    
     const channel = pusher.subscribe(`ride-${ride.id}`);
 
     if (isOwnRide) {
+      // DRIVER LISTENING:
       channel.bind("passenger-update", (data: { userId: string, lat: number, lng: number }) => {
         setPassengerLocations(prev => ({ ...prev, [data.userId]: { lat: data.lat, lng: data.lng } }));
       });
+
+      channel.bind("new-request", (data: any) => {
+        setPendingRequests(prev => [...prev, data]);
+        addNotification("info", `New ride request from ${data.passenger.firstName}!`);
+      });
+
+      channel.bind("passenger-cancelled", (data: { passengerId: string, passengerName: string, wasAccepted: boolean }) => {
+        addNotification("warning", `${data.passengerName} cancelled their ride.`);
+        if (data.wasAccepted) {
+          setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft + 1 }));
+          setPassengerLocations(prev => { const newLocs = { ...prev }; delete newLocs[data.passengerId]; return newLocs; });
+        } else {
+          setPendingRequests(prev => prev.filter(req => req.passenger._id.toString() !== data.passengerId));
+        }
+      });
+
     } else {
+      // PASSENGER LISTENING:
       channel.bind("driver-update", (data: { lat: number, lng: number }) => {
         setDriverLocation(data);
+      });
+
+      channel.bind("request-status-update", (data: { passengerId: string, status: string }) => {
+        if (user && user._id && data.passengerId === user._id.toString()) {
+          setRequestStatus(data.status);
+          if (data.status === "accepted") {
+            setIsAlreadyBooked(true); 
+            setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft - 1 })); 
+            addNotification("success", "Your ride request was ACCEPTED!");
+          } else if (data.status === "declined") {
+            addNotification("warning", "Your ride request was DECLINED by the driver.");
+          }
+        }
       });
     }
 
     return () => {
       channel.unbind_all();
       pusher.unsubscribe(`ride-${ride.id}`);
-      // pusher.disconnect() WAS DELETED SO IT STOPPED CRASHING
+      pusher.disconnect();
     };
-  }, [ride?.id, isOwnRide, isAlreadyBooked]);
+    
+  }, [ride?.id, isOwnRide, isAlreadyBooked, requestStatus, user, addNotification]);
 
   // 2. THE BROADCASTER: Passenger automatically broadcasts so driver can see them
   // (The Driver's broadcaster was deleted from here because it lives in app-context now!)
@@ -125,8 +176,8 @@ export default function RideDetailPage() {
       watchId = navigator.geolocation.watchPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
-          setMyLocation({ lat: latitude, lng: longitude }); 
-          broadcastLocation(ride.id, latitude, longitude, "passenger", user?._id); 
+          setMyLocation({ lat: latitude, lng: longitude });
+          broadcastLocation(ride.id, latitude, longitude, "passenger", user?._id);
         },
         (error) => console.error("GPS Error:", error),
         { enableHighAccuracy: true, maximumAge: 0 }
@@ -209,6 +260,24 @@ export default function RideDetailPage() {
     }, 1500);
   };
 
+  const handleRespondToRequest = async (requestId: string, action: "accept" | "decline") => {
+    try {
+      await respondToRequest(requestId, action);
+
+      // Remove the request from the screen immediately
+      setPendingRequests((prev) => prev.filter((req) => req._id !== requestId));
+
+      if (action === "accept") {
+        setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft - 1 }));
+        addNotification("success", "Passenger accepted!");
+      } else {
+        addNotification("info", "Passenger declined.");
+      }
+    } catch (error: any) {
+      addNotification("warning", error.message || "Something went wrong.");
+    }
+  };
+
   return (
     <div className="min-h-full bg-background pb-24">
       {/* Map Preview */}
@@ -269,6 +338,50 @@ export default function RideDetailPage() {
             </div>
           </div>
         </div>
+
+
+        {/* --->  PENDING REQUESTS DASHBOARD (ONLY DRIVER SEES THIS) <--- */}
+        {isOwnRide && pendingRequests.length > 0 && (
+          <div className="bg-card rounded-2xl shadow-sm border border-border p-5 mb-4">
+            <h3 className="font-semibold mb-3 flex items-center justify-between">
+              Pending Requests
+              <span className="bg-[#f59e0b] text-white text-xs px-2 py-0.5 rounded-full">{pendingRequests.length}</span>
+            </h3>
+            
+            <div className="space-y-3">
+              {pendingRequests.map((req) => (
+                <div key={req._id} className="flex items-center justify-between bg-[#F5F7FA] dark:bg-[#1C2333] p-3 rounded-xl border border-border">
+                  <div className="flex items-center gap-3">
+                    <ImageWithFallback src={req.passenger.photo || "/default-avatar.png"} alt="Passenger" className="w-10 h-10 rounded-full object-cover" />
+                    <div>
+                      <p className="text-sm font-semibold">{req.passenger.firstName} {req.passenger.lastName}</p>
+                      <div className="flex items-center gap-1">
+                        <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                        <span className="text-xs text-muted-foreground">{req.passenger.rating || "5.0"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => handleRespondToRequest(req._id, "decline")}
+                      className="w-9 h-9 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => handleRespondToRequest(req._id, "accept")}
+                      className="w-9 h-9 rounded-full bg-[#00C9B1]/10 text-[#00C9B1] flex items-center justify-center hover:bg-[#00C9B1]/20 transition-colors"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* ---> END PENDING REQUESTS <--- */}
 
         {/* Trip Info */}
         <div className="grid grid-cols-3 gap-3 mb-4">
@@ -359,9 +472,8 @@ export default function RideDetailPage() {
                   addNotification("success", "Ride started! Location is live.");
                 }
               }}
-              className={`flex-1 py-3.5 rounded-2xl font-semibold flex items-center justify-center gap-2 transition-all shadow-sm ${
-                isBroadcasting ? "bg-red-500/10 text-red-500 hover:bg-red-500/20" : "bg-[#00C9B1]/10 text-[#00C9B1] hover:bg-[#00C9B1]/20"
-              }`}
+              className={`flex-1 py-3.5 rounded-2xl font-semibold flex items-center justify-center gap-2 transition-all shadow-sm ${isBroadcasting ? "bg-red-500/10 text-red-500 hover:bg-red-500/20" : "bg-[#00C9B1]/10 text-[#00C9B1] hover:bg-[#00C9B1]/20"
+                }`}
             >
               {isBroadcasting ? (
                 <><MapPin className="w-5 h-5 animate-pulse" /> Stop Tracking</>
@@ -369,9 +481,21 @@ export default function RideDetailPage() {
                 <><MapPin className="w-5 h-5" /> Share Live Location</>
               )}
             </button>
-          ) : isAlreadyBooked ? (
+          ) : requestStatus === "pending" ? (
+            // NEW: Show "Pending Approval" if they requested it
+            <div className="flex-1 py-3.5 rounded-2xl bg-[#f59e0b]/10 text-[#f59e0b] font-semibold flex items-center justify-center gap-2 border border-[#f59e0b]/20">
+              <Clock className="w-5 h-5 animate-pulse" />
+              Pending Approval
+            </div>
+          ) : isAlreadyBooked || requestStatus === "accepted" ? (
+            // Existing: Show if already booked
             <div className="flex-1 py-3.5 rounded-2xl bg-[#00C9B1]/10 text-[#00C9B1] font-semibold flex items-center justify-center gap-2">
-              <CheckCircle className="w-5 h-5" /> Ride Booked
+              <CheckCircle className="w-5 h-5" />
+              Ride Booked
+            </div>
+          ) : requestStatus === "declined" ? (
+            <div className="flex-1 py-3.5 rounded-2xl bg-red-500/10 text-red-500 font-semibold flex items-center justify-center gap-2">
+              Declined by Driver
             </div>
           ) : (
             <button

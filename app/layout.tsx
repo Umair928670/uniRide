@@ -9,6 +9,8 @@ import "./styles/theme.css";
 import "./styles/index.css";
 import { getLoggedInUser } from '@/lib/actions/user.actions';
 
+export const dynamic = "force-dynamic";
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const dbUser = await getLoggedInUser();
   return (

@@ -2,7 +2,6 @@ import { Star, ArrowRight, Clock, Users } from "lucide-react";
 import { Ride } from "./mock-data";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
 import { useRouter } from "next/navigation";
-import router from "next/dist/shared/lib/router/router";
 
 interface RideCardProps {
   ride: Ride;
