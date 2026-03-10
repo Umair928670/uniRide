@@ -1,5 +1,6 @@
 'use client';
 
+import { useAuth } from "@clerk/nextjs";
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from "react";
 import { Ride, MOCK_RIDES, PAST_RIDES, AVATARS } from "./mock-data";
 import { broadcastLocation } from "@/lib/actions/location.actions"; 
@@ -38,6 +39,7 @@ export interface UserProfile {
   department: string;
   verified: boolean;
   ridesTaken: number;
+  role: UserRole;
   ridesOffered: number;
   rating: number;
   phone: string;
@@ -151,7 +153,18 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
   const [appNotifications, setAppNotifications] = useState<AppNotification[]>(INITIAL_APP_NOTIFICATIONS);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
-  
+  const { isLoaded, isSignedIn, signOut } = useAuth();
+
+
+  useEffect(() => {
+    // If Clerk's frontend thinks we are logged in, BUT the server returned null 
+    // (because the user was deleted or the DB failed), the session is corrupted.
+    if (isLoaded && isSignedIn && !initialUser) {
+      console.log("Dead session detected. Automatically logging out...");
+      // Silently kill the dead cookie and send them back to the login screen
+      signOut({ redirectUrl: '/login' }); 
+    }
+  }, [isLoaded, isSignedIn, initialUser, signOut]);
   // Global Tracking States
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [activeTrackingRideId, setActiveTrackingRideId] = useState<string | null>(null);

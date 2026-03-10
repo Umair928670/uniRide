@@ -4,28 +4,47 @@ import { auth } from "@clerk/nextjs/server";
 import { connectToDatabase } from "../mongodb";
 import User from "../models/user.model";
 import { revalidatePath } from "next/cache";
+import { currentUser } from "@clerk/nextjs/server";
 
 export async function getLoggedInUser() {
-    
   try {
-     // 1. Get the current logged-in user's ID from Clerk
-    const { userId } = await auth();
+    // 1. Get the FULL user object from Clerk
+    const clerkUser = await currentUser();
 
-    if (!userId) {
-      return null; // No one is logged in
+    if (!clerkUser) {
+      return null; 
     }
-    // 2. Connect to MongoDB securely
+
     await connectToDatabase();
 
-    // 3. Find the user in our database that matches the Clerk ID
-    const dbUser = await User.findOne({ clerkId: userId });
+    // 2. Try to find them in MongoDB
+    let dbUser = await User.findOne({ clerkId: clerkUser.id });
 
+    // 3. THE FALLBACK: If they don't exist yet, create them INSTANTLY!
     if (!dbUser) {
-      return null;
+      console.log("User not found in DB. Running fallback creation...");
+      
+      dbUser = await User.create({
+        clerkId: clerkUser.id,
+        email: clerkUser.emailAddresses[0]?.emailAddress || "",
+        firstName: clerkUser.firstName || "",
+        lastName: clerkUser.lastName || "",
+        photo: clerkUser.imageUrl || "/default-avatar.png",
+        
+        // ---> THIS IS THE KEY! It forces the layout to show the overlay! <---
+        role: "none", 
+        
+        // Default required fields
+        university: "",
+        department: "", 
+        verified: false,
+        ridesTaken: 0,
+        ridesOffered: 0,
+        rating: 5.0,
+      });
+      console.log("Fallback user created successfully with role 'none'!");
     }
 
-    // 4. Convert the Mongoose document into a plain Javascript object
-    // (Next.js requires this to safely pass data from Server to Client)
     return JSON.parse(JSON.stringify(dbUser));
     
   } catch (error) {
@@ -33,6 +52,7 @@ export async function getLoggedInUser() {
     return null;
   }
 }
+
 
 export async function updateUser(updateData: any) {
   try {
@@ -59,5 +79,32 @@ export async function updateUser(updateData: any) {
   } catch (error) {
     console.error("Error updating user:", error);
     throw new Error("Failed to update user");
+  }
+}
+
+// ---> NEW: Function to save the user's role during onboarding <---
+export async function updateUserRole(role: "passenger" | "driver" | "both") {
+  try {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    await connectToDatabase();
+
+    // Find the user by their Clerk ID and strictly update their role
+    const updatedUser = await User.findOneAndUpdate(
+      { clerkId: userId },
+      { $set: { role: role } },
+      { new: true }
+    );
+
+    if (!updatedUser) throw new Error("User not found in database");
+
+    // Clear the cache for the home page so the overlay disappears instantly
+    revalidatePath("/");
+
+    return JSON.parse(JSON.stringify(updatedUser));
+  } catch (error) {
+    console.error("Error updating user role:", error);
+    throw new Error("Failed to update user role");
   }
 }

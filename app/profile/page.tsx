@@ -16,7 +16,8 @@ export default function ProfilePage() {
   const router = useRouter();
   const { signOut } = useClerk();
   const { user, activeRole, isDarkMode, toggleDarkMode, logout, switchRole, appNotifications } = useApp();
-
+  const baseRole = user?.role || "both"; 
+  
   if (!user) {
     return <div className="p-8 text-center">Loading profile...</div>;
   }
@@ -49,31 +50,38 @@ export default function ProfilePage() {
           <p className="text-muted-foreground text-[12px] mt-0.5">{user?.email}</p>
         </div>
 
-        {/* Role Switcher */}
+        {/* Role Switcher / Badge */}
         <div className="bg-card rounded-2xl shadow-sm border border-border p-4 mb-6">
           <div className="flex items-center gap-2 mb-3">
             <Car className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
-            <h3 className="font-semibold text-[14px]">My Role</h3>
+            <h3 className="font-semibold text-[14px]">
+              {baseRole === "both" ? "My Role" : "Your Role"}
+            </h3>
           </div>
           <p className="text-[12px] text-muted-foreground mb-3">
-            Switch how you use UniRide. You can be a passenger, a driver, or both!
+            {baseRole === "both" 
+              ? "Switch how you use UniRide. You can be a passenger, a driver, or both!"
+              : `You are registered as a ${baseRole} on UniRide.`}
           </p>
           <div className="flex bg-[#F5F7FA] dark:bg-[#1C2333] rounded-2xl p-1 gap-1">
-            {ROLE_OPTIONS.map((option) => {
-              const isActive = activeRole === option.key;
+            {/* NEW: Dynamically filter the options so single-role users only see their specific badge! */}
+            {ROLE_OPTIONS.filter(opt => baseRole === "both" || opt.key === baseRole).map((option) => {
+              // If they are locked into one role, it's always visually "active"
+              const isActive = baseRole === "both" ? activeRole === option.key : true;
               const Icon = option.icon;
               return (
                 <button
                   key={option.key}
-                  onClick={() => switchRole(option.key)}
+                  // Disable clicking entirely if they don't have "both"
+                  onClick={() => baseRole === "both" && switchRole(option.key)}
                   className={`flex-1 flex flex-col items-center gap-1 py-2.5 px-2 rounded-xl text-[12px] transition-all ${
                     isActive
                       ? "bg-card text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  } ${baseRole !== "both" ? "cursor-default" : "cursor-pointer active:scale-[0.98]"}`}
                 >
                   <Icon className={`w-5 h-5 ${isActive ? "text-[#00C9B1]" : ""}`} />
-                  <span className="font-medium">{option.label}</span>
+                  <span className="font-medium capitalize">{option.label}</span>
                   <span className="text-[10px] text-muted-foreground hidden sm:block">{option.description}</span>
                 </button>
               );

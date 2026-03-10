@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { createRide } from "@/lib/actions/ride.actions";
 import dynamic from "next/dynamic";
 import {
@@ -18,62 +18,140 @@ import {
   FileText,
   Camera,
   AlertTriangle,
+  Navigation,
+  Loader2
 } from "lucide-react";
 import { useApp } from "@/components/app-context";
 import { useRouter } from "next/navigation";
-import { LOCATION_COORDS } from "@/components/locations";
 
 const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView), { 
   ssr: false 
 });
 
-const SUGGESTED_LOCATIONS = Object.keys(LOCATION_COORDS);
-
 export default function OfferRidePage() {
-  const { offerRide, isDarkMode, isDriverVerified, user } = useApp();
+  const { offerRide, isDarkMode, isDriverVerified, user, addNotification } = useApp();
   const router = useRouter();
+  
+  // Text inputs
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  
+  // NEW: Store actual real-world coordinates!
+  const [fromCoords, setFromCoords] = useState<[number, number] | null>(null);
+  const [toCoords, setToCoords] = useState<[number, number] | null>(null);
+
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [seats, setSeats] = useState(2);
   const [price, setPrice] = useState("");
   const [uniOnly, setUniOnly] = useState(true);
+  
   const [submitted, setSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // NEW: Dynamic Autocomplete States
   const [showFromSuggestions, setShowFromSuggestions] = useState(false);
   const [showToSuggestions, setShowToSuggestions] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [fromSuggestions, setFromSuggestions] = useState<any[]>([]);
+  const [toSuggestions, setToSuggestions] = useState<any[]>([]);
+  const [isLocating, setIsLocating] = useState(false);
 
-  const fromSuggestions = SUGGESTED_LOCATIONS.filter(
-    (l) => l.toLowerCase().includes(from.toLowerCase()) && l !== from
-  );
-  const toSuggestions = SUGGESTED_LOCATIONS.filter(
-    (l) => l.toLowerCase().includes(to.toLowerCase()) && l !== to
-  );
+  // --- AUTOMATIC ADDRESS SEARCH (OpenStreetMap Nominatim API) ---
+  const searchLocation = async (query: string, setter: any) => {
+    if (query.length < 3) {
+      setter([]);
+      return;
+    }
+    try {
+      // Free open-source geocoding API
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`);
+      const data = await res.json();
+      setter(data.map((item: any) => ({
+        name: item.display_name,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon)
+      })));
+    } catch (e) {
+      console.error("Geocoding error", e);
+    }
+  };
 
+  useEffect(() => {
+    // Debounce the API call so we don't spam the free server while typing
+    const delayFrom = setTimeout(() => {
+      if (from && !fromCoords) searchLocation(from, setFromSuggestions);
+    }, 800);
+    return () => clearTimeout(delayFrom);
+  }, [from, fromCoords]);
+
+  useEffect(() => {
+    const delayTo = setTimeout(() => {
+      if (to && !toCoords) searchLocation(to, setToSuggestions);
+    }, 800);
+    return () => clearTimeout(delayTo);
+  }, [to, toCoords]);
+
+  // --- GPS CURRENT LOCATION ---
+  const handleCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      addNotification("warning", "Geolocation is not supported by your browser");
+      return;
+    }
+    
+    setIsLocating(true);
+    setFrom("Finding your location...");
+    setShowFromSuggestions(false);
+
+    navigator.geolocation.getCurrentPosition(async (position) => {
+      const { latitude, longitude } = position.coords;
+      
+      try {
+        // Reverse Geocoding: Turn coordinates into a real street name
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+        const data = await res.json();
+        
+        // Clean up the massive address string OpenStreetMap sometimes returns
+        const addressParts = data.display_name.split(", ");
+        const shortAddress = addressParts.slice(0, 3).join(", "); 
+        
+        setFrom(shortAddress || "Current Location");
+        setFromCoords([latitude, longitude]);
+        setErrors((p) => ({ ...p, from: "" }));
+      } catch(e) {
+        // Fallback if the API fails
+        setFrom("Current Location");
+        setFromCoords([latitude, longitude]);
+      } finally {
+        setIsLocating(false);
+      }
+    }, () => {
+      setFrom("");
+      setIsLocating(false);
+      addNotification("warning", "Could not get your location. Please check your browser permissions.");
+    });
+  };
+
+  // --- MAP RENDERING LOGIC ---
   const mapMarkers = useMemo(() => {
     const m: { position: [number, number]; type: "start" | "end" | "user" | "default" }[] = [];
-    const fromCoord = LOCATION_COORDS[from];
-    const toCoord = LOCATION_COORDS[to];
-    if (fromCoord) m.push({ position: fromCoord, type: "start" });
-    if (toCoord) m.push({ position: toCoord, type: "end" });
+    if (fromCoords) m.push({ position: fromCoords, type: "start" });
+    if (toCoords) m.push({ position: toCoords, type: "end" });
     return m;
-  }, [from, to]);
+  }, [fromCoords, toCoords]);
 
   const routePoints = useMemo(() => {
-    const fromCoord = LOCATION_COORDS[from];
-    const toCoord = LOCATION_COORDS[to];
-    if (!fromCoord || !toCoord) return undefined;
-    const midLat = (fromCoord[0] + toCoord[0]) / 2 + 0.002;
-    const midLng = (fromCoord[1] + toCoord[1]) / 2 - 0.001;
-    return [fromCoord, [midLat, midLng] as [number, number], toCoord];
-  }, [from, to]);
+    if (!fromCoords || !toCoords) return undefined;
+    const midLat = (fromCoords[0] + toCoords[0]) / 2 + 0.002;
+    const midLng = (fromCoords[1] + toCoords[1]) / 2 - 0.001;
+    return [fromCoords, [midLat, midLng] as [number, number], toCoords];
+  }, [fromCoords, toCoords]);
 
+  // --- VALIDATION & SUBMIT ---
   const validate = () => {
     const e: Record<string, string> = {};
-    if (!from.trim()) e.from = "Pick a starting location";
-    if (!to.trim()) e.to = "Pick a destination";
+    if (!from.trim() || !fromCoords) e.from = "Please select a valid starting location from the list";
+    if (!to.trim() || !toCoords) e.to = "Please select a valid destination from the list";
     if (!date) e.date = "Select a date";
     if (!time) e.time = "Select departure time";
     if (!price || parseFloat(price) <= 0) e.price = "Enter a valid price";
@@ -83,19 +161,14 @@ export default function OfferRidePage() {
 
   const handleSubmit = async () => {
     if (!validate()) return;
-
     setIsSubmitting(true);
 
     try {
-      const fromCoords = LOCATION_COORDS[from] || [37.427, -122.17];
-      const toCoords = LOCATION_COORDS[to] || [37.44, -122.15];
-
-      // Call the real MongoDB Server Action!
       await createRide({
         from,
         to,
-        fromCoords,
-        toCoords,
+        fromCoords: fromCoords!,
+        toCoords: toCoords!,
         date,
         time,
         totalSeats: seats,
@@ -103,11 +176,10 @@ export default function OfferRidePage() {
         price: parseFloat(price),
         uniOnly,
       });
-      
       setSubmitted(true);
     } catch (error: any) {
       console.error(error);
-      alert(error.message || "Failed to publish ride. Please try again.");
+      addNotification("warning", error.message || "Failed to publish ride. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -139,13 +211,9 @@ export default function OfferRidePage() {
             <button
               onClick={() => {
                 setSubmitted(false);
-                setFrom("");
-                setTo("");
-                setDate("");
-                setTime("");
-                setPrice("");
-                setSeats(2);
-                setErrors({});
+                setFrom(""); setTo("");
+                setFromCoords(null); setToCoords(null);
+                setDate(""); setTime(""); setPrice(""); setSeats(2); setErrors({});
               }}
               className="px-6 py-3 rounded-2xl bg-[#00C9B1] text-white font-semibold hover:bg-[#00C9B1]/90 transition-colors"
             >
@@ -171,20 +239,14 @@ export default function OfferRidePage() {
 
     return (
       <div className="min-h-full bg-background pb-28">
-        {/* Header */}
         <div className="sticky top-0 z-40 bg-card/95 backdrop-blur-lg border-b border-border px-4 pt-[env(safe-area-inset-top)]">
           <div className="max-w-lg mx-auto flex items-center gap-3 py-3">
-            <button
-              onClick={() => router.back()}
-              className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-muted transition-colors shrink-0"
-            >
+            <button onClick={() => router.back()} className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-muted transition-colors shrink-0">
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
               <h1 className="text-[18px]">Offer a Ride</h1>
-              <p className="text-muted-foreground text-[12px]">
-                Share your ride with fellow students
-              </p>
+              <p className="text-muted-foreground text-[12px]">Share your ride with fellow students</p>
             </div>
           </div>
         </div>
@@ -202,61 +264,39 @@ export default function OfferRidePage() {
 
           {/* Checklist */}
           <div className="bg-card rounded-2xl border border-border p-4 space-y-3 mb-6">
-            <p className="text-[12px] text-muted-foreground font-medium uppercase tracking-wide">
-              Required Documents
-            </p>
-
-            <div className={`flex items-center gap-3 p-3 rounded-xl ${
-              missingLicense ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"
-            }`}>
+            <p className="text-[12px] text-muted-foreground font-medium uppercase tracking-wide">Required Documents</p>
+            
+            <div className={`flex items-center gap-3 p-3 rounded-xl ${missingLicense ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"}`}>
               <FileText className={`w-5 h-5 shrink-0 ${missingLicense ? "text-red-500" : "text-green-500"}`} />
               <div className="flex-1">
                 <p className="text-[14px]">Driver License</p>
-                <p className="text-[12px] text-muted-foreground">
-                  {missingLicense ? "Not uploaded yet" : "Uploaded"}
-                </p>
+                <p className="text-[12px] text-muted-foreground">{missingLicense ? "Not uploaded yet" : "Uploaded"}</p>
               </div>
               {!missingLicense && <CheckCircle className="w-5 h-5 text-green-500" />}
             </div>
 
-            <div className={`flex items-center gap-3 p-3 rounded-xl ${
-              missingVehiclePic ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"
-            }`}>
+            <div className={`flex items-center gap-3 p-3 rounded-xl ${missingVehiclePic ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"}`}>
               <Camera className={`w-5 h-5 shrink-0 ${missingVehiclePic ? "text-red-500" : "text-green-500"}`} />
               <div className="flex-1">
                 <p className="text-[14px]">Vehicle Picture</p>
-                <p className="text-[12px] text-muted-foreground">
-                  {missingVehiclePic ? "Not uploaded yet" : "Uploaded"}
-                </p>
+                <p className="text-[12px] text-muted-foreground">{missingVehiclePic ? "Not uploaded yet" : "Uploaded"}</p>
               </div>
               {!missingVehiclePic && <CheckCircle className="w-5 h-5 text-green-500" />}
             </div>
 
-            <div className={`flex items-center gap-3 p-3 rounded-xl ${
-              missingVehicleInfo ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"
-            }`}>
+            <div className={`flex items-center gap-3 p-3 rounded-xl ${missingVehicleInfo ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"}`}>
               <Shield className={`w-5 h-5 shrink-0 ${missingVehicleInfo ? "text-red-500" : "text-green-500"}`} />
               <div className="flex-1">
                 <p className="text-[14px]">Vehicle Information</p>
-                <p className="text-[12px] text-muted-foreground">
-                  {missingVehicleInfo ? "Not set up yet" : `${user.vehicleInfo!.color} ${user.vehicleInfo!.make} ${user.vehicleInfo!.model}`}
-                </p>
+                <p className="text-[12px] text-muted-foreground">{missingVehicleInfo ? "Not set up yet" : `${user.vehicleInfo!.color} ${user.vehicleInfo!.make} ${user.vehicleInfo!.model}`}</p>
               </div>
               {!missingVehicleInfo && <CheckCircle className="w-5 h-5 text-green-500" />}
             </div>
           </div>
 
-          <button
-            onClick={() => router.push("/settings?section=vehicle")}
-            className="w-full py-4 rounded-2xl bg-[#1A3C6E] text-white font-semibold hover:bg-[#1A3C6E]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#1A3C6E]/25 flex items-center justify-center gap-2"
-          >
-            <Shield className="w-5 h-5" />
-            Go to Vehicle Settings
+          <button onClick={() => router.push("/settings?section=vehicle")} className="w-full py-4 rounded-2xl bg-[#1A3C6E] text-white font-semibold hover:bg-[#1A3C6E]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#1A3C6E]/25 flex items-center justify-center gap-2">
+            <Shield className="w-5 h-5" /> Go to Vehicle Settings
           </button>
-
-          <p className="text-center text-[12px] text-muted-foreground mt-3">
-            Upload your documents to start offering rides
-          </p>
         </div>
       </div>
     );
@@ -267,32 +307,27 @@ export default function OfferRidePage() {
       {/* Header */}
       <div className="sticky top-0 z-40 bg-card/95 backdrop-blur-lg border-b border-border px-4 pt-[env(safe-area-inset-top)]">
         <div className="max-w-lg mx-auto flex items-center gap-3 py-3">
-          <button
-            onClick={() => router.back()}
-            className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-muted transition-colors shrink-0"
-          >
+          <button onClick={() => router.back()} className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-muted transition-colors shrink-0">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
             <h1 className="text-[18px]">Offer a Ride</h1>
-            <p className="text-muted-foreground text-[12px]">
-              Share your ride with fellow students
-            </p>
+            <p className="text-muted-foreground text-[12px]">Share your ride with fellow students</p>
           </div>
         </div>
       </div>
 
       <div className="max-w-lg mx-auto px-4 pt-5">
         <div className="space-y-4">
-          {/* ─── Route Section ─��─ */}
+          
+          {/* ─── Route Section ─── */}
           <div className="bg-card rounded-2xl border border-border p-4 space-y-3">
             <p className="text-[13px] text-muted-foreground flex items-center gap-1.5">
-              <MapPin className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
-              Route
+              <MapPin className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> Route
             </p>
 
-            {/* From */}
-            <div className="relative">
+            {/* From Input */}
+            <div className="relative z-30">
               <div className="relative">
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-[#1A3C6E] dark:bg-[#00C9B1] border-2 border-[#1A3C6E]/30 dark:border-[#00C9B1]/30" />
                 <input
@@ -301,30 +336,45 @@ export default function OfferRidePage() {
                   value={from}
                   onChange={(e) => {
                     setFrom(e.target.value);
+                    setFromCoords(null); // Clear coords when they type
                     setShowFromSuggestions(true);
                     setErrors((p) => ({ ...p, from: "" }));
                   }}
                   onFocus={() => setShowFromSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowFromSuggestions(false), 250)}
-                  className={`w-full pl-10 pr-4 py-3 rounded-xl bg-background border ${
-                    errors.from ? "border-red-400" : "border-border"
-                  } focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
+                  className={`w-full pl-10 pr-4 py-3 rounded-xl bg-background border ${errors.from ? "border-red-400" : "border-border"} focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
                 />
               </div>
-              {showFromSuggestions && fromSuggestions.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 bg-card rounded-xl border border-border shadow-lg z-20 overflow-hidden max-h-48 overflow-y-auto">
-                  {fromSuggestions.slice(0, 6).map((s) => (
+              
+              {/* FROM Suggestions Dropdown */}
+              {showFromSuggestions && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-card rounded-xl border border-border shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+                  {/* GPS LOCATION BUTTON */}
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleCurrentLocation();
+                    }}
+                    className="w-full text-left px-4 py-3 text-[13px] hover:bg-muted transition-colors flex items-center gap-2 font-semibold text-[#00C9B1] border-b border-border/50"
+                  >
+                    {isLocating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
+                    {isLocating ? "Finding you..." : "Use Current Location"}
+                  </button>
+
+                  {/* API RESULTS */}
+                  {fromSuggestions.map((s, i) => (
                     <button
-                      key={s}
+                      key={i}
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        setFrom(s);
+                        const shortName = s.name.split(", ").slice(0, 3).join(", ");
+                        setFrom(shortName);
+                        setFromCoords([s.lat, s.lng]);
                         setShowFromSuggestions(false);
                       }}
-                      className="w-full text-left px-4 py-2.5 text-[13px] hover:bg-muted transition-colors flex items-center gap-2"
+                      className="w-full text-left px-4 py-2.5 text-[13px] hover:bg-muted transition-colors flex items-start gap-2"
                     >
-                      <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                      {s}
+                      <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                      <span className="line-clamp-2">{s.name}</span>
                     </button>
                   ))}
                 </div>
@@ -332,13 +382,12 @@ export default function OfferRidePage() {
               {errors.from && <p className="text-[12px] text-red-500 mt-1">{errors.from}</p>}
             </div>
 
-            {/* Vertical connector line */}
             <div className="flex items-center pl-[18px]">
               <div className="w-px h-3 bg-border" />
             </div>
 
-            {/* To */}
-            <div className="relative">
+            {/* To Input */}
+            <div className="relative z-20">
               <div className="relative">
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-[#00C9B1] border-2 border-[#00C9B1]/30" />
                 <input
@@ -347,30 +396,32 @@ export default function OfferRidePage() {
                   value={to}
                   onChange={(e) => {
                     setTo(e.target.value);
+                    setToCoords(null);
                     setShowToSuggestions(true);
                     setErrors((p) => ({ ...p, to: "" }));
                   }}
                   onFocus={() => setShowToSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowToSuggestions(false), 250)}
-                  className={`w-full pl-10 pr-4 py-3 rounded-xl bg-background border ${
-                    errors.to ? "border-red-400" : "border-border"
-                  } focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
+                  className={`w-full pl-10 pr-4 py-3 rounded-xl bg-background border ${errors.to ? "border-red-400" : "border-border"} focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
                 />
               </div>
+
+              {/* TO Suggestions Dropdown */}
               {showToSuggestions && toSuggestions.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 bg-card rounded-xl border border-border shadow-lg z-20 overflow-hidden max-h-48 overflow-y-auto">
-                  {toSuggestions.slice(0, 6).map((s) => (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-card rounded-xl border border-border shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+                  {toSuggestions.map((s, i) => (
                     <button
-                      key={s}
+                      key={i}
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        setTo(s);
+                        const shortName = s.name.split(", ").slice(0, 3).join(", ");
+                        setTo(shortName);
+                        setToCoords([s.lat, s.lng]);
                         setShowToSuggestions(false);
                       }}
-                      className="w-full text-left px-4 py-2.5 text-[13px] hover:bg-muted transition-colors flex items-center gap-2"
+                      className="w-full text-left px-4 py-2.5 text-[13px] hover:bg-muted transition-colors flex items-start gap-2"
                     >
-                      <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                      {s}
+                      <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                      <span className="line-clamp-2">{s.name}</span>
                     </button>
                   ))}
                 </div>
@@ -392,10 +443,10 @@ export default function OfferRidePage() {
                 />
               </div>
               <div className="p-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-[#1A3C6E]" />
+                <div className="w-2 h-2 rounded-full bg-[#1A3C6E] shrink-0" />
                 <span className="text-[13px] truncate">{from}</span>
                 <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0" />
-                <div className="w-2 h-2 rounded-full bg-[#00C9B1]" />
+                <div className="w-2 h-2 rounded-full bg-[#00C9B1] shrink-0" />
                 <span className="text-[13px] truncate">{to}</span>
               </div>
             </div>
@@ -404,45 +455,30 @@ export default function OfferRidePage() {
           {/* ─── Date & Time Section ─── */}
           <div className="bg-card rounded-2xl border border-border p-4">
             <p className="text-[13px] text-muted-foreground flex items-center gap-1.5 mb-3">
-              <Calendar className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
-              Schedule
+              <Calendar className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> Schedule
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[12px] text-muted-foreground mb-1 block">Date</label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => {
-                      setDate(e.target.value);
-                      setErrors((p) => ({ ...p, date: "" }));
-                    }}
-                    min={new Date().toISOString().split("T")[0]}
-                    className={`w-full px-3 py-3 rounded-xl bg-background border text-foreground ${
-                      errors.date ? "border-red-400" : "border-border"
-                    } focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
-                    style={{ colorScheme: "auto" }}
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => { setDate(e.target.value); setErrors((p) => ({ ...p, date: "" })); }}
+                  min={new Date().toISOString().split("T")[0]}
+                  className={`w-full px-3 py-3 rounded-xl bg-background border text-foreground ${errors.date ? "border-red-400" : "border-border"} focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
+                  style={{ colorScheme: "auto" }}
+                />
                 {errors.date && <p className="text-[12px] text-red-500 mt-1">{errors.date}</p>}
               </div>
               <div>
                 <label className="text-[12px] text-muted-foreground mb-1 block">Time</label>
-                <div className="relative">
-                  <input
-                    type="time"
-                    value={time}
-                    onChange={(e) => {
-                      setTime(e.target.value);
-                      setErrors((p) => ({ ...p, time: "" }));
-                    }}
-                    className={`w-full px-3 py-3 rounded-xl bg-background border text-foreground ${
-                      errors.time ? "border-red-400" : "border-border"
-                    } focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
-                    style={{ colorScheme: "auto" }}
-                  />
-                </div>
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => { setTime(e.target.value); setErrors((p) => ({ ...p, time: "" })); }}
+                  className={`w-full px-3 py-3 rounded-xl bg-background border text-foreground ${errors.time ? "border-red-400" : "border-border"} focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
+                  style={{ colorScheme: "auto" }}
+                />
                 {errors.time && <p className="text-[12px] text-red-500 mt-1">{errors.time}</p>}
               </div>
             </div>
@@ -451,62 +487,28 @@ export default function OfferRidePage() {
           {/* ─── Seats & Price Section ─── */}
           <div className="bg-card rounded-2xl border border-border p-4">
             <p className="text-[13px] text-muted-foreground flex items-center gap-1.5 mb-3">
-              <Users className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
-              Ride Details
+              <Users className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> Ride Details
             </p>
             <div className="grid grid-cols-2 gap-3">
-              {/* Seats - stepper */}
               <div>
-                <label className="text-[12px] text-muted-foreground mb-1 block">
-                  Seats Available
-                </label>
+                <label className="text-[12px] text-muted-foreground mb-1 block">Seats Available</label>
                 <div className="flex items-center gap-2 bg-background rounded-xl border border-border px-2 py-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setSeats((s) => Math.max(1, s - 1))}
-                    className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center hover:bg-muted-foreground/20 transition-colors active:scale-90"
-                  >
-                    <Minus className="w-4 h-4" />
-                  </button>
-                  <span className="flex-1 text-center text-[16px] tabular-nums">
-                    {seats}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSeats((s) => Math.min(6, s + 1))}
-                    className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center hover:bg-muted-foreground/20 transition-colors active:scale-90"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
+                  <button type="button" onClick={() => setSeats((s) => Math.max(1, s - 1))} className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center hover:bg-muted-foreground/20 active:scale-90"><Minus className="w-4 h-4" /></button>
+                  <span className="flex-1 text-center text-[16px] tabular-nums">{seats}</span>
+                  <button type="button" onClick={() => setSeats((s) => Math.min(6, s + 1))} className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center hover:bg-muted-foreground/20 active:scale-90"><Plus className="w-4 h-4" /></button>
                 </div>
               </div>
-
-              {/* Price */}
               <div>
-                <label className="text-[12px] text-muted-foreground mb-1 block">
-                  Price / seat
-                </label>
+                <label className="text-[12px] text-muted-foreground mb-1 block">Price / seat</label>
                 <div className="relative">
                   <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#00C9B1]" />
                   <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.50"
-                    min="0"
-                    placeholder="0.00"
-                    value={price}
-                    onChange={(e) => {
-                      setPrice(e.target.value);
-                      setErrors((p) => ({ ...p, price: "" }));
-                    }}
-                    className={`w-full pl-9 pr-3 py-3 rounded-xl bg-background border ${
-                      errors.price ? "border-red-400" : "border-border"
-                    } focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
+                    type="number" inputMode="decimal" step="0.50" min="0" placeholder="0.00" value={price}
+                    onChange={(e) => { setPrice(e.target.value); setErrors((p) => ({ ...p, price: "" })); }}
+                    className={`w-full pl-9 pr-3 py-3 rounded-xl bg-background border ${errors.price ? "border-red-400" : "border-border"} focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
                   />
                 </div>
-                {errors.price && (
-                  <p className="text-[12px] text-red-500 mt-1">{errors.price}</p>
-                )}
+                {errors.price && <p className="text-[12px] text-red-500 mt-1">{errors.price}</p>}
               </div>
             </div>
           </div>
@@ -517,23 +519,15 @@ export default function OfferRidePage() {
               <Shield className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
               <div>
                 <p className="text-[14px]">UniRide Only</p>
-                <p className="text-[12px] text-muted-foreground">
-                  Only verified students
-                </p>
+                <p className="text-[12px] text-muted-foreground">Only verified students</p>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setUniOnly(!uniOnly)}
-              className={`w-12 h-7 rounded-full transition-colors relative ${
-                uniOnly ? "bg-[#00C9B1]" : "bg-muted-foreground/30"
-              }`}
+              className={`w-12 h-7 rounded-full transition-colors relative ${uniOnly ? "bg-[#00C9B1]" : "bg-muted-foreground/30"}`}
             >
-              <div
-                className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-1 transition-all ${
-                  uniOnly ? "right-1" : "left-1"
-                }`}
-              />
+              <div className={`w-5 h-5 rounded-full bg-white shadow-sm absolute top-1 transition-all ${uniOnly ? "right-1" : "left-1"}`} />
             </button>
           </div>
 
@@ -544,17 +538,12 @@ export default function OfferRidePage() {
             className="w-full py-4 rounded-2xl bg-[#00C9B1] text-white font-semibold hover:bg-[#00C9B1]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#00C9B1]/20 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (
-              <>
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Publishing...
-              </>
+              <><Loader2 className="w-5 h-5 animate-spin" /> Publishing...</>
             ) : (
-              <>
-                <CheckCircle className="w-5 h-5" />
-                Publish Ride
-              </>
+              <><CheckCircle className="w-5 h-5" /> Publish Ride</>
             )}
           </button>
+
         </div>
       </div>
     </div>

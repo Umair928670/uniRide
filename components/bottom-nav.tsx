@@ -7,25 +7,32 @@ import { useApp } from "@/components/app-context";
 export function BottomNav() {
   const router = useRouter();
   const pathname = usePathname();
-  const { activeRole } = useApp();
+  const { user } = useApp();
+  
+  // Default to "both" if user isn't fully loaded yet to prevent buttons from flashing
+  const role = user?.role || "both";
 
   if (pathname === "/login") return null;
 
-  const showOffer = activeRole !== "passenger";
+  // 1. Logic to show/hide specific elements based on role
+  const showOffer = role === "driver" || role === "both";
+  const showBrowse = role === "passenger" || role === "both";
 
+  // 2. Dynamically build the left items array
   const leftItems = [
     { icon: Map, label: "Home", path: "/" },
-    { icon: Search, label: "Browse", path: "/search" },
   ];
+  
+  // Only add the Search/Browse button if they are a passenger
+  if (showBrowse) {
+    leftItems.push({ icon: Search, label: "Browse", path: "/search" });
+  }
 
+  // Right items stay the same for everyone
   const rightItems = [
     { icon: Car, label: "My Rides", path: "/my-rides" },
     { icon: User, label: "Profile", path: "/profile" },
   ];
-
-  const allItems = showOffer
-    ? [...leftItems, ...rightItems]
-    : [...leftItems, ...rightItems];
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50">
@@ -52,7 +59,7 @@ export function BottomNav() {
                 <button
                   onClick={() => router.push("/offerRide")}
                   className={`relative w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-90 ${
-                    pathname === "/offer-ride"
+                    pathname === "/offerRide" || pathname === "/offer-ride"
                       ? "bg-[#1A3C6E] shadow-[#1A3C6E]/30"
                       : "bg-gradient-to-br from-[#00C9B1] to-[#00A896] shadow-[#00C9B1]/30 hover:shadow-[#00C9B1]/50"
                   }`}
@@ -61,7 +68,7 @@ export function BottomNav() {
                 </button>
                 <span
                   className={`absolute -bottom-4 left-1/2 -translate-x-1/2 text-[10px] whitespace-nowrap transition-colors ${
-                    pathname === "/offer-ride"
+                    pathname === "/offerRide" || pathname === "/offer-ride"
                       ? "text-[#00C9B1]"
                       : "text-muted-foreground"
                   }`}

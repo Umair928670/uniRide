@@ -1,6 +1,6 @@
 'use client';
 import { updateUser } from "@/lib/actions/user.actions";
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import {
   ArrowLeft,
   User,
@@ -40,8 +40,19 @@ function SettingsContent() {
   const initialSection = (searchParams.get("section") as Section) || "main";
   const [section, setSection] = useState<Section>(initialSection);
 
+  // NEW: Check if the user is allowed to see vehicle settings
+  const baseRole = user?.role || "both";
+  const showVehicleSettings = baseRole === "driver" || baseRole === "both";
+
+  // NEW: Security check. If a passenger tries to force the URL to the vehicle section, kick them back.
+  useEffect(() => {
+    if (section === "vehicle" && !showVehicleSettings) {
+      setSection("main");
+    }
+  }, [section, showVehicleSettings]);
+
   if (section === "edit-profile") return <EditProfile user={user} onSave={updateProfile} onBack={() => setSection("main")} addNotification={addNotification} />;
-  if (section === "vehicle") return <VehicleSettings vehicle={user.vehicleInfo} onSave={updateVehicle} onBack={() => setSection("main")} addNotification={addNotification} />;
+  if (section === "vehicle" && showVehicleSettings) return <VehicleSettings vehicle={user.vehicleInfo} onSave={updateVehicle} onBack={() => setSection("main")} addNotification={addNotification} />;
   if (section === "notification-prefs") return <NotificationPrefs settings={settings} onUpdate={updateSettings} onBack={() => setSection("main")} />;
   if (section === "privacy") return <PrivacySettings settings={settings} onUpdate={updateSettings} onBack={() => setSection("main")} />;
   if (section === "language") return <LanguageSettings settings={settings} onUpdate={updateSettings} onBack={() => setSection("main")} addNotification={addNotification} />;
@@ -66,18 +77,24 @@ function SettingsContent() {
             <p className="text-[12px] text-muted-foreground font-medium uppercase tracking-wide">Account</p>
           </div>
           <SettingsItem icon={<User className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />} label="Edit Profile" subtitle={user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : ""} onClick={() => setSection("edit-profile")} />
-          <Divider />
-          <SettingsItem
-            icon={<Car className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />}
-            label="Vehicle Information"
-            subtitle={
-              user?.vehicleInfo
-                ? `${user.vehicleInfo.color} ${user.vehicleInfo.make} ${user.vehicleInfo.model}`
-                : "Not set up"
-            }
-            onClick={() => setSection("vehicle")}
-            badge={activeRole !== "passenger" ? "Driver" : undefined}
-          />
+          
+          {/* ---> NEW: Conditionally render the Vehicle Settings <--- */}
+          {showVehicleSettings && (
+            <>
+              <Divider />
+              <SettingsItem
+                icon={<Car className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />}
+                label="Vehicle Information"
+                subtitle={
+                  user?.vehicleInfo
+                    ? `${user.vehicleInfo.color} ${user.vehicleInfo.make} ${user.vehicleInfo.model}`
+                    : "Not set up"
+                }
+                onClick={() => setSection("vehicle")}
+                badge={activeRole !== "passenger" ? "Driver" : undefined}
+              />
+            </>
+          )}
         </div>
 
         {/* Preferences Section */}

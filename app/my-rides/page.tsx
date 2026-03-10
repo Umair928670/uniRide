@@ -7,7 +7,9 @@ import { RideCard } from "@/components/ride-card";
 import { getMyRides } from "@/lib/actions/ride.actions";
 
 export default function MyRidesPage() {
-  const { cancelRide, activeRole, addNotification } = useApp();
+  // NEW: Grab the user so we can check their permanent base role
+  const { user, cancelRide, addNotification } = useApp();
+  const baseRole = user?.role || "both";
   
   // Database States
   const [liveUpcomingRides, setLiveUpcomingRides] = useState<any[]>([]);
@@ -15,8 +17,9 @@ export default function MyRidesPage() {
   const [livePastRides, setLivePastRides] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // NEW: Default the starting tab based on their permanent role
   const [tab, setTab] = useState<"upcoming" | "past" | "offered">(
-    activeRole === "driver" ? "offered" : "upcoming"
+    baseRole === "driver" ? "offered" : "upcoming"
   );
 
   useEffect(() => {
@@ -80,7 +83,6 @@ export default function MyRidesPage() {
         // Also add past offered rides to the "Past" tab
         formattedOffered.forEach((ride: any) => {
             if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
-                // Ensure no duplicates if they were both driver and somehow passenger (should be impossible)
                 if(!past.find(p => p.id === ride.id)) past.push(ride);
             }
         });
@@ -110,17 +112,18 @@ export default function MyRidesPage() {
     fetchLiveRides();
   }, [addNotification]);
 
+  // NEW: Dynamically build the tabs based on baseRole
   const tabs = [
-    ...(activeRole !== "driver"
+    ...(baseRole === "passenger" || baseRole === "both"
       ? [{ key: "upcoming" as const, label: "Upcoming", icon: Calendar, count: liveUpcomingRides.length }]
       : []),
-    ...(activeRole !== "passenger"
+    ...(baseRole === "driver" || baseRole === "both"
       ? [{ key: "offered" as const, label: "Offered", icon: Car, count: liveOfferedRides.length }]
       : []),
     { key: "past" as const, label: "Past", icon: History, count: livePastRides.length },
   ];
 
-  // If role changed and current tab is hidden, reset
+  // Safely fallback if the current tab isn't valid for their role
   const validKeys = tabs.map((t) => t.key);
   const activeTab = validKeys.includes(tab) ? tab : validKeys[0];
 
@@ -133,7 +136,7 @@ export default function MyRidesPage() {
         <div className="flex items-center justify-between pt-4 pb-2">
           <h1 className="text-2xl font-bold">My Rides</h1>
           <span className="px-2.5 py-1 rounded-full bg-[#00C9B1]/10 text-[#00C9B1] text-[11px] font-semibold capitalize">
-            {activeRole === "both" ? "Driver & Passenger" : activeRole}
+            {baseRole === "both" ? "Driver & Passenger" : baseRole}
           </span>
         </div>
 
@@ -146,7 +149,7 @@ export default function MyRidesPage() {
               className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[13px] font-medium transition-all ${
                 activeTab === t.key
                   ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               <t.icon className="w-4 h-4" />

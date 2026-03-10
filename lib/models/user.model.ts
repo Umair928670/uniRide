@@ -7,12 +7,19 @@ const UserSchema = new Schema({
   firstName: { type: String },
   lastName: { type: String },
   photo: { type: String },
+
+  // Add this inside your UserSchema definition
+  role: {
+    type: String,
+    enum: ["passenger", "driver", "both", "none"],
+    default: "none", // Defaults to 'none' so we know to show them the onboarding screen!
+  },
   
   // --- Profile Details ---
   phone: { type: String, default: "" },
   bio: { type: String, default: "" },
   university: { type: String, default: "CUST" },
-  department: { type: String, default: "CS", enum: ["CS", "SE", "BBA", "AI", "MATH", "PHYS", "CHEM", "ENG", "BIO"] },
+  department: { type: String, default: "CS" },
   
   // --- App Statistics ---
   ridesTaken: { type: Number, default: 0 },
