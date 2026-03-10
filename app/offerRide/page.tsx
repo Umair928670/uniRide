@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from "react";
+import { createRide } from "@/lib/actions/ride.actions";
 import dynamic from "next/dynamic";
 import {
   MapPin,
@@ -42,6 +43,7 @@ export default function OfferRidePage() {
   const [showFromSuggestions, setShowFromSuggestions] = useState(false);
   const [showToSuggestions, setShowToSuggestions] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fromSuggestions = SUGGESTED_LOCATIONS.filter(
     (l) => l.toLowerCase().includes(from.toLowerCase()) && l !== from
@@ -79,24 +81,36 @@ export default function OfferRidePage() {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validate()) return;
 
-    const fromCoords = LOCATION_COORDS[from] || [37.427, -122.17];
-    const toCoords = LOCATION_COORDS[to] || [37.44, -122.15];
+    setIsSubmitting(true);
 
-    offerRide({
-      from,
-      to,
-      fromCoords: fromCoords as [number, number],
-      toCoords: toCoords as [number, number],
-      date: date || "Today",
-      departureTime: time || "8:00 AM",
-      seatsLeft: seats,
-      totalSeats: seats,
-      price: parseFloat(price),
-    });
-    setSubmitted(true);
+    try {
+      const fromCoords = LOCATION_COORDS[from] || [37.427, -122.17];
+      const toCoords = LOCATION_COORDS[to] || [37.44, -122.15];
+
+      // Call the real MongoDB Server Action!
+      await createRide({
+        from,
+        to,
+        fromCoords,
+        toCoords,
+        date,
+        time,
+        totalSeats: seats,
+        seatsLeft: seats,
+        price: parseFloat(price),
+        uniOnly,
+      });
+      
+      setSubmitted(true);
+    } catch (error: any) {
+      console.error(error);
+      alert(error.message || "Failed to publish ride. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (submitted) {
@@ -526,10 +540,20 @@ export default function OfferRidePage() {
           {/* ─── Submit ─── */}
           <button
             onClick={handleSubmit}
-            className="w-full py-4 rounded-2xl bg-[#00C9B1] text-white font-semibold hover:bg-[#00C9B1]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#00C9B1]/20 flex items-center justify-center gap-2"
+            disabled={isSubmitting}
+            className="w-full py-4 rounded-2xl bg-[#00C9B1] text-white font-semibold hover:bg-[#00C9B1]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#00C9B1]/20 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
           >
-            <CheckCircle className="w-5 h-5" />
-            Publish Ride
+            {isSubmitting ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Publishing...
+              </>
+            ) : (
+              <>
+                <CheckCircle className="w-5 h-5" />
+                Publish Ride
+              </>
+            )}
           </button>
         </div>
       </div>

@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useMemo } from "react";
-import { MapPin, Circle, Home, GraduationCap, Star, Search, ChevronUp, Navigation } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { MapPin, Circle, Home, GraduationCap,ArrowRight, Star, Search, ChevronUp, Navigation } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import dynamic from 'next/dynamic';
+import Pusher from "pusher-js";
+import { getActiveRide } from "@/lib/actions/ride.actions";
 
 type MarkerType = "start" | "end" | "user" | "default";
 
@@ -24,23 +26,71 @@ const MapView = dynamic<MapViewProps>(
 
 const USER_LOCATION: [number, number] = [37.4275, -122.1697];
 
-export  default function HomePage() {
+export default function HomePage() {
   const router = useRouter();
   const { availableRides, isDarkMode, savedPlaces } = useApp();
   const [sheetOpen, setSheetOpen] = useState(true);
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
+  const [activeRide, setActiveRide] = useState<any>(null);
+  const [liveLocation, setLiveLocation] = useState<{ lat: number, lng: number } | null>(null);
+
+  // 1. Check for an active ride when the home page loads
+  useEffect(() => {
+    const checkActiveRide = async () => {
+      const ride = await getActiveRide();
+      if (ride) setActiveRide(ride);
+    };
+    checkActiveRide();
+  }, []);
+
+  // 2. If there is an active ride, listen to Pusher!
+  useEffect(() => {
+    if (!activeRide) return;
+
+    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
+    });
+    const channel = pusher.subscribe(`ride-${activeRide._id}`);
+
+    // If I'm the passenger, listen for the driver
+    channel.bind("driver-update", (data: { lat: number, lng: number }) => {
+      setLiveLocation(data);
+    });
+
+    return () => {
+      channel.unbind_all();
+      pusher.unsubscribe(`ride-${activeRide._id}`);
+    };
+  }, [activeRide]);
 
   // Show ride markers on the map
-const markers = useMemo(() => {
+  const markers = useMemo(() => {
     const m: { position: [number, number]; type: MarkerType }[] = [
       { position: USER_LOCATION, type: "user" },
     ];
     availableRides.slice(0, 5).forEach((ride) => {
       m.push({ position: ride.fromCoords, type: "start" });
     });
-    return m;
-  }, [availableRides]);
+    if (!activeRide) {
+      return m;
+    }
+    // IF ACTIVE RIDE EXISTS: Take over the map!
+    const markers: any[] = [
+      { position: [activeRide.originCoords.lat, activeRide.originCoords.lng], type: "start" },
+      { position: [activeRide.destinationCoords.lat, activeRide.destinationCoords.lng], type: "end" },
+    ];
+
+    // Add the moving car or the latest known location from the database
+    if (liveLocation) {
+      markers.push({ position: [liveLocation.lat, liveLocation.lng], type: "user" });
+    } else if (activeRide.currentLocation) {
+      // Fallback: If Pusher hasn't sent an update yet, show the last saved DB location
+      markers.push({ position: [activeRide.currentLocation.lat, activeRide.currentLocation.lng], type: "user" });
+    }
+
+    return markers;
+  }, [activeRide, liveLocation]);
 
   const handleFindRide = () => {
     const combined = [destination, pickup].filter(Boolean).join(" ");
@@ -58,6 +108,17 @@ const markers = useMemo(() => {
 
   return (
     <div className="relative w-full h-full overflow-hidden">
+      {activeRide && (
+        <div className="absolute top-20 left-4 right-4 z-50 bg-[#1A3C6E] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center cursor-pointer" onClick={() => router.push(`/ride/${activeRide._id}`)}>
+           <div>
+             <p className="text-xs text-[#00C9B1] font-bold tracking-wider uppercase mb-1">Ride in Progress</p>
+             <p className="font-medium text-sm">Heading to {activeRide.destination}</p>
+           </div>
+           <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
+             <ArrowRight className="w-4 h-4 text-white" />
+           </div>
+        </div>
+      )}
       {/* Interactive Map Background */}
       <div className="absolute inset-0 z-0">
         <MapView
@@ -80,9 +141,8 @@ const markers = useMemo(() => {
 
       {/* Bottom Sheet */}
       <div
-        className={`absolute bottom-0 left-0 right-0 z-30 transition-transform duration-500 ease-out ${
-          sheetOpen ? "translate-y-0" : "translate-y-[calc(100%-64px)]"
-        }`}
+        className={`absolute bottom-0 left-0 right-0 z-30 transition-transform duration-500 ease-out ${sheetOpen ? "translate-y-0" : "translate-y-[calc(100%-64px)]"
+          }`}
       >
         {/* Drag Handle */}
         <button
@@ -91,9 +151,8 @@ const markers = useMemo(() => {
         >
           <div className="flex flex-col items-center gap-0.5">
             <ChevronUp
-              className={`w-5 h-5 text-muted-foreground transition-transform ${
-                sheetOpen ? "rotate-180" : ""
-              }`}
+              className={`w-5 h-5 text-muted-foreground transition-transform ${sheetOpen ? "rotate-180" : ""
+                }`}
             />
             <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
           </div>
@@ -149,19 +208,6 @@ const markers = useMemo(() => {
                 <span className="text-[13px]">Saved Places</span>
               </button>
             </div>
-
-            {/* Available rides count */}
-            {/* <div className="flex items-center justify-between px-1">
-              <p className="text-[13px] text-muted-foreground">
-                <span className="text-[#00C9B1] font-semibold">{availableRides.length}</span> rides available nearby
-              </p>
-              <button
-                onClick={() => navigate("/search")}
-                className="text-[13px] text-[#1A3C6E] dark:text-[#00C9B1] font-medium"
-              >
-                Browse all →
-              </button>
-            </div> */}
 
             {/* Find Ride CTA */}
             <button

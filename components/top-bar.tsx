@@ -20,10 +20,13 @@ export function TopBar({ transparent = false }: TopBarProps) {
     "/settings",
     "/help",
     "/search",
-    "/offer-ride"
+    "/offer-ride",
+    "/ride/[id]"
   ];
 
-  if (hiddenPaths.includes(pathname)) {
+ const isHidden = hiddenPaths.some((path) => path === pathname) || pathname.startsWith("/ride/");
+
+  if (isHidden) {
     return null;
   }
 

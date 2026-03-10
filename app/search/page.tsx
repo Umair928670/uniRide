@@ -1,11 +1,11 @@
 'use client';
 
-import { Suspense, useState, useMemo } from "react";
-import { ArrowLeft, SlidersHorizontal, Search, X, MapPin } from "lucide-react";
+import { Suspense, useState, useMemo, useEffect } from "react";
+import { ArrowLeft, SlidersHorizontal, Search, X, MapPin, Loader2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import { RideCard } from "@/components/ride-card";
-import { LOCATION_COORDS } from "@/components/locations";
+import { getAvailableRides } from "@/lib/actions/ride.actions";
 import dynamic from "next/dynamic";
 
 const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView || mod.default), { 
@@ -15,7 +15,13 @@ const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.Ma
 function SearchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { availableRides, isDarkMode } = useApp();
+  const { isDarkMode } = useApp(); 
+  
+  // Real-time Database States
+  const [liveRides, setLiveRides] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Search & Filter States
   const [searchQuery, setSearchQuery] = useState(
     searchParams.get("q") || searchParams.get("pickup") || ""
   );
@@ -24,8 +30,66 @@ function SearchContent() {
   const [timeFilter, setTimeFilter] = useState<"all" | "morning" | "afternoon" | "evening">("all");
   const [showMap, setShowMap] = useState(false);
 
+  // 1. Fetch live rides and format them to match the UI perfectly
+  const fetchRides = async () => {
+    setIsLoading(true);
+    try {
+      // Fetch all available future rides from MongoDB
+      const data = await getAvailableRides();
+      
+      
+
+      // Data formatter to match your RideCard component exactly
+        const formattedRides = data.map((ride: any) => {
+          // 1. Convert DB Date ("2024-03-08" -> "Mar 8")
+          const [year, month, day] = ride.date.split('-');
+          const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
+          const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+          // 2. Convert DB Time ("14:30" -> "2:30 PM")
+          const [hours, minutes] = ride.time.split(':');
+          const hourNum = parseInt(hours, 10);
+          const ampm = hourNum >= 12 ? 'PM' : 'AM';
+          const formattedHour = hourNum % 12 || 12;
+          const displayTime = `${formattedHour}:${minutes} ${ampm}`;
+
+          return {
+            id: ride._id,
+            from: ride.origin,
+            to: ride.destination,
+            fromCoords: [ride.originCoords.lat, ride.originCoords.lng],
+            toCoords: [ride.destinationCoords.lat, ride.destinationCoords.lng],
+            driverName: `${ride.driver?.firstName || "Unknown"} ${ride.driver?.lastName || ""}`.trim(),
+            driverAvatar: ride.driver?.photo || "/default-avatar.png",
+            rating: ride.driver?.rating || 5.0,
+            price: ride.price,
+            
+            // Put the newly formatted strings into the UI
+            departureTime: displayTime, 
+            date: displayDate,          
+            
+            seatsLeft: ride.availableSeats,
+            totalSeats: ride.totalSeats,
+            status: ride.status,
+            rawDate: new Date(ride.departureTime) 
+          };
+        });
+
+      setLiveRides(formattedRides);
+    } catch (error) {
+      console.error("Failed to fetch rides", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRides();
+  }, []);
+
+  // 2. Client-side filtering now uses 'liveRides' instead of mock data
   const filteredRides = useMemo(() => {
-    return availableRides.filter((ride) => {
+    return liveRides.filter((ride) => {
       // Word-level matching against ride's from, to, and driver name
       const words = searchQuery
         .toLowerCase()
@@ -46,7 +110,7 @@ function SearchContent() {
       else if (priceFilter === "high") matchesPrice = ride.price > 10;
 
       let matchesTime = true;
-      if (timeFilter !== "all") {
+      if (timeFilter !== "all" && ride.departureTime) {
         const hour = parseInt(ride.departureTime);
         const isPM = ride.departureTime.includes("PM");
         const h24 = isPM && hour !== 12 ? hour + 12 : !isPM && hour === 12 ? 0 : hour;
@@ -57,13 +121,13 @@ function SearchContent() {
 
       return matchesSearch && matchesPrice && matchesTime;
     });
-  }, [availableRides, searchQuery, priceFilter, timeFilter]);
+  }, [liveRides, searchQuery, priceFilter, timeFilter]);
 
   const mapMarkers = useMemo(() => {
     const m: { position: [number, number]; type: "start" | "end" | "user" | "default" }[] = [];
     filteredRides.forEach((ride) => {
-      m.push({ position: ride.fromCoords, type: "start" });
-      m.push({ position: ride.toCoords, type: "end" });
+      if (ride.fromCoords) m.push({ position: ride.fromCoords, type: "start" });
+      if (ride.toCoords) m.push({ position: ride.toCoords, type: "end" });
     });
     return m;
   }, [filteredRides]);
@@ -156,7 +220,7 @@ function SearchContent() {
       {/* Toggle Map / List */}
       <div className="max-w-lg mx-auto w-full px-4 pt-3 flex items-center justify-between">
         <p className="text-[13px] text-muted-foreground">
-          <span className="font-semibold text-foreground">{filteredRides.length}</span> rides available
+          <span className="font-semibold text-foreground">{isLoading ? "..." : filteredRides.length}</span> rides available
         </p>
         <button
           onClick={() => setShowMap(!showMap)}
@@ -172,7 +236,7 @@ function SearchContent() {
       </div>
 
       {/* Map View */}
-      {showMap && (
+      {showMap && !isLoading && (
         <div className="max-w-lg mx-auto w-full px-4 pt-3">
           <div className="h-64 sm:h-80 rounded-2xl overflow-hidden border border-border">
             <MapView
@@ -186,10 +250,16 @@ function SearchContent() {
 
       {/* Results */}
       <div className="max-w-lg mx-auto w-full px-4 pt-3 pb-24 space-y-3 flex-1">
-        {filteredRides.map((ride) => (
-          <RideCard key={ride.id} ride={ride} />
-        ))}
-        {filteredRides.length === 0 && (
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+            <Loader2 className="w-8 h-8 animate-spin mb-3 text-[#00C9B1]" />
+            <p>Loading available rides...</p>
+          </div>
+        ) : filteredRides.length > 0 ? (
+          filteredRides.map((ride) => (
+            <RideCard key={ride.id} ride={ride} />
+          ))
+        ) : (
           <div className="text-center py-16">
             <Search className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
             <p className="text-muted-foreground">No rides found</p>
@@ -207,7 +277,7 @@ export default function SearchPage() {
   return (
     <Suspense fallback={
       <div className="min-h-screen bg-background flex items-center justify-center">
-        Loading search...
+        <Loader2 className="w-6 h-6 animate-spin text-[#00C9B1]" />
       </div>
     }>
       <SearchContent />
