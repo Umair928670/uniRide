@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from "react";
-import { MapPin, Circle, Home, GraduationCap, ArrowRight, Star, Search, ChevronUp, Navigation, X, Loader2, Plus, Bookmark } from "lucide-react";
+import { MapPin, Circle, Home, GraduationCap, ArrowRight, Star, Search, ChevronUp, Navigation, X, Loader2, Plus, Bookmark, Edit2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import dynamic from 'next/dynamic';
@@ -26,7 +26,6 @@ const MapView = dynamic<MapViewProps>(
   { ssr: false }
 );
 
-// Fallback location if they deny GPS (Center of Islamabad)
 const DEFAULT_LOCATION: [number, number] = [33.6844, 73.0479];
 
 export default function HomePage() {
@@ -34,9 +33,18 @@ export default function HomePage() {
   
   const { user, availableRides, isDarkMode, updateProfile, addNotification } = useApp();
   const savedPlaces = user?.savedPlaces || [];
-  const customSavedPlaces = savedPlaces.filter((p: any) => p.name !== "Home" && p.name !== "University");
+  
+  // --- STRICT FRONTEND FILTER ---
+  // This physically removes Home and University from the array before the modal can render them
+  const customSavedPlaces = savedPlaces.filter((p: any) => {
+    const identifier = p.label || p.name;
+    return identifier !== "Home" && identifier !== "University";
+  });
+  
+  const homePlace = savedPlaces.find((p: any) => (p.label || p.name) === "Home");
+  const uniPlace = savedPlaces.find((p: any) => (p.label || p.name) === "University");
+  // ------------------------------
 
-  // NEW: Dynamic Map Camera States
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_LOCATION);
   const [mapZoom, setMapZoom] = useState(13);
 
@@ -46,7 +54,6 @@ export default function HomePage() {
   const [activeRide, setActiveRide] = useState<any>(null);
   const [liveLocation, setLiveLocation] = useState<{ lat: number, lng: number } | null>(null);
 
-  // Modal States
   const [showSavedPlacesList, setShowSavedPlacesList] = useState(false);
   const [savingPlaceLabel, setSavingPlaceLabel] = useState<string | null>(null);
   const [newPlaceName, setNewPlaceName] = useState(""); 
@@ -57,17 +64,14 @@ export default function HomePage() {
   const [showAddressSuggestions, setShowAddressSuggestions] = useState(false);
   const [roadRoute, setRoadRoute] = useState<[number, number][]>([]);
 
-  // NEW: Stealth GPS Fetcher
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          // If they allow it, silently jump to their real neighborhood!
           setMapCenter([pos.coords.latitude, pos.coords.longitude]);
           setMapZoom(15); 
         },
         (err) => {
-          // If denied, do nothing. It will safely stay in Islamabad.
           console.log("GPS denied or unavailable.");
         }
       );
@@ -141,10 +145,7 @@ export default function HomePage() {
   }, [activeRide]);
 
   const markers = useMemo(() => {
-    // 1. START WITH A COMPLETELY CLEAN MAP. No dummy rides, no user marker.
     const m: { position: [number, number]; type: MarkerType }[] = [];
-    
-    // 2. ONLY show markers if a ride is actively in progress
     if (!activeRide) return m;
 
     const activeMarkers: any[] = [
@@ -188,7 +189,7 @@ export default function HomePage() {
   };
 
   const handleQuickPlace = (label: "Home" | "University") => {
-    const place = savedPlaces.find((p: any) => p.name === label);
+    const place = savedPlaces.find((p: any) => (p.label || p.name) === label);
     if (place) {
       setDestination(place.address);
       addNotification("info", `${label} selected`);
@@ -199,28 +200,71 @@ export default function HomePage() {
     }
   };
 
-  const handleSelectCustomPlace = (address: string, name: string) => {
+  const handleEditPlace = (placeLabel: string) => {
+    const place = savedPlaces.find((p: any) => (p.label || p.name) === placeLabel);
+    if (place) {
+      setSavingPlaceLabel(placeLabel);
+      setNewPlaceAddress(place.address);
+      setNewPlaceCoords([place.lat, place.lng]);
+    }
+  };
+
+  const handleSelectCustomPlace = (address: string, label: string) => {
     setDestination(address);
     setShowSavedPlacesList(false);
-    addNotification("info", `${name} selected`);
+    addNotification("info", `${label} selected`);
   };
 
   const submitNewPlace = async () => {
-    const finalName = savingPlaceLabel === "Custom" ? newPlaceName : savingPlaceLabel;
-    if (!newPlaceAddress.trim() || !finalName?.trim() || !user || !newPlaceCoords) return;
+    const finalLabel = savingPlaceLabel === "Custom" ? newPlaceName : savingPlaceLabel;
+    
+    if (!newPlaceAddress.trim() || !finalLabel?.trim() || !user || !newPlaceCoords) return;
+
+    // --- FRONTEND UNIQUENESS VALIDATOR ---
+    const isEditing = savedPlaces.some((p: any) => (p.label || p.name) === finalLabel);
+
+    if (savingPlaceLabel === "Custom" && !isEditing) {
+      const nameExists = savedPlaces.some((p: any) => {
+        const existingName = p.label || p.name;
+        return existingName?.toLowerCase() === finalLabel.toLowerCase();
+      });
+      if (nameExists) {
+        addNotification("warning", `You already have a place named "${finalLabel}". Please choose a different name.`);
+        return;
+      }
+    }
+
+    const addressExists = savedPlaces.find((p: any) => p.address?.toLowerCase() === newPlaceAddress.toLowerCase());
+    if (addressExists) {
+      const existingName = addressExists.label || addressExists.label;
+      if (existingName !== finalLabel) {
+        addNotification("warning", `This address is already saved as "${existingName}". Addresses must be unique.`);
+        return;
+      }
+    }
+    // -------------------------------------
+
     setIsSavingPlace(true);
+
     try {
       const newPlace = {
-        label: finalName,
+        label: finalLabel,
         address: newPlaceAddress,
         lat: newPlaceCoords[0],
-        lng: newPlaceCoords[1]
+        lng: newPlaceCoords[1],
+        icon: savingPlaceLabel === "Custom" ? "bookmark" : "map-pin" 
       };
-      const updatedPlaces = [...savedPlaces, newPlace];
+
+      const updatedPlaces = isEditing 
+        ? savedPlaces.map((p: any) => (p.label || p.name) === finalLabel ? newPlace : p)
+        : [...savedPlaces, newPlace];
+
       await updateUser({ savedPlaces: updatedPlaces });
       updateProfile({ savedPlaces: updatedPlaces });
+      
       setDestination(newPlaceAddress);
-      addNotification("success", `${finalName} saved successfully!`);
+      addNotification("success", `${finalLabel} saved successfully!`);
+      
       setSavingPlaceLabel(null);
       setNewPlaceName("");
       setNewPlaceAddress("");
@@ -247,7 +291,6 @@ export default function HomePage() {
       )}
       
       <div className="absolute inset-0 z-0">
-        {/* NEW: Passing dynamic mapCenter and mapZoom */}
         <MapView
           center={mapCenter}
           zoom={mapZoom}
@@ -274,7 +317,6 @@ export default function HomePage() {
         <Navigation className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
       </button>
 
-      {/* --- ALL BOTTOM SHEETS AND MODALS REMAIN EXACTLY THE SAME --- */}
       <div className={`absolute bottom-0 left-0 right-0 z-30 transition-transform duration-500 ease-out ${sheetOpen ? "translate-y-0" : "translate-y-[calc(100%-64px)]"}`}>
         <button onClick={() => setSheetOpen(!sheetOpen)} className="w-full flex justify-center pt-2 pb-1">
           <div className="flex flex-col items-center gap-0.5">
@@ -285,23 +327,41 @@ export default function HomePage() {
 
         <div className="bg-card rounded-t-3xl shadow-[0_-4px_30px_rgba(0,0,0,0.12)] max-w-lg mx-auto">
           <div className="px-5 pt-4 pb-28 space-y-4">
+            
             <div className="relative">
               <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#00C9B1]" />
               <input type="text" placeholder="Where are you going?" value={destination} onChange={(e) => setDestination(e.target.value)} className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#1C2333] border border-border focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all placeholder:text-muted-foreground" />
             </div>
+            
             <div className="relative">
               <Circle className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#1A3C6E]" />
               <input type="text" placeholder="Pickup point" value={pickup} onChange={(e) => setPickup(e.target.value)} className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#1C2333] border border-border focus:border-[#1A3C6E] focus:ring-2 focus:ring-[#1A3C6E]/20 outline-none transition-all placeholder:text-muted-foreground" />
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-              <button onClick={() => handleQuickPlace("Home")} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95">
-                <Home className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Home</span>
-              </button>
-              <button onClick={() => handleQuickPlace("University")} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95">
-                <GraduationCap className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">University</span>
-              </button>
-              <button onClick={() => setShowSavedPlacesList(true)} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95">
+              <div className="flex items-center bg-[#F5F7FA] dark:bg-[#1C2333] border border-border rounded-full overflow-hidden hover:border-[#00C9B1] transition-colors shrink-0">
+                <button onClick={() => handleQuickPlace("Home")} className="flex items-center gap-1.5 pl-4 pr-3 py-2 hover:bg-muted/50 transition-colors active:scale-95">
+                  <Home className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Home</span>
+                </button>
+                {homePlace && (
+                  <button onClick={() => handleEditPlace("Home")} className="pr-3 pl-2 py-2 border-l border-border hover:bg-muted/50 transition-colors text-muted-foreground hover:text-[#00C9B1]" title="Edit Home Address">
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center bg-[#F5F7FA] dark:bg-[#1C2333] border border-border rounded-full overflow-hidden hover:border-[#00C9B1] transition-colors shrink-0">
+                <button onClick={() => handleQuickPlace("University")} className="flex items-center gap-1.5 pl-4 pr-3 py-2 hover:bg-muted/50 transition-colors active:scale-95">
+                  <GraduationCap className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">University</span>
+                </button>
+                {uniPlace && (
+                  <button onClick={() => handleEditPlace("University")} className="pr-3 pl-2 py-2 border-l border-border hover:bg-muted/50 transition-colors text-muted-foreground hover:text-[#00C9B1]" title="Edit University Address">
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <button onClick={() => setShowSavedPlacesList(true)} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95 shrink-0">
                 <Bookmark className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Saved Places</span>
               </button>
             </div>
@@ -324,6 +384,7 @@ export default function HomePage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            
             <div className="overflow-y-auto p-2">
               {customSavedPlaces.length === 0 ? (
                 <div className="text-center py-8 px-4">
@@ -336,19 +397,25 @@ export default function HomePage() {
               ) : (
                 <div className="space-y-1">
                   {customSavedPlaces.map((place: any, index: number) => (
-                    <button key={index} onClick={() => handleSelectCustomPlace(place.address, place.name)} className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-muted transition-colors text-left">
-                      <div className="w-10 h-10 rounded-full bg-[#1A3C6E]/10 dark:bg-[#00C9B1]/10 flex items-center justify-center shrink-0">
-                        <MapPin className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-[14px]">{place.name}</p>
-                        <p className="text-[12px] text-muted-foreground truncate">{place.address}</p>
-                      </div>
-                    </button>
+                    <div key={index} className="w-full flex items-center justify-between p-3 rounded-2xl hover:bg-muted transition-colors group">
+                      <button onClick={() => handleSelectCustomPlace(place.address, place.label || place.name)} className="flex items-center gap-3 flex-1 text-left min-w-0">
+                        <div className="w-10 h-10 rounded-full bg-[#1A3C6E]/10 dark:bg-[#00C9B1]/10 flex items-center justify-center shrink-0">
+                          <MapPin className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
+                        </div>
+                        <div className="min-w-0 flex-1 pr-2">
+                          <p className="font-semibold text-[14px] truncate">{place.label || place.name}</p>
+                          <p className="text-[12px] text-muted-foreground truncate">{place.address}</p>
+                        </div>
+                      </button>
+                      <button onClick={() => handleEditPlace(place.label || place.name)} className="p-2 text-muted-foreground hover:text-[#00C9B1] hover:bg-background rounded-full transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100" title="Edit Place">
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
             </div>
+
             <div className="p-4 border-t border-border bg-card rounded-b-3xl">
               <button onClick={() => { setShowSavedPlacesList(false); setSavingPlaceLabel("Custom"); setNewPlaceName(""); setNewPlaceAddress(""); setNewPlaceCoords(null); }} className="w-full py-3.5 rounded-xl bg-muted text-foreground font-semibold hover:bg-muted/80 active:scale-[0.98] transition-all flex items-center justify-center gap-2">
                 <Plus className="w-4 h-4" /> Add New Place
@@ -370,6 +437,7 @@ export default function HomePage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            
             <div className="p-5 space-y-4">
               {savingPlaceLabel === "Custom" && (
                 <div>
@@ -380,11 +448,13 @@ export default function HomePage() {
                   </div>
                 </div>
               )}
+
               <div className="relative z-50">
                 <label className="text-[12px] font-semibold text-muted-foreground mb-1 block">Full Address</label>
                 <div className="relative">
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
                   <input type="text" autoFocus={savingPlaceLabel !== "Custom"} placeholder="e.g. 123 Main St, City" value={newPlaceAddress} onChange={(e) => { setNewPlaceAddress(e.target.value); setNewPlaceCoords(null); setShowAddressSuggestions(true); }} onFocus={() => setShowAddressSuggestions(true)} className={`w-full pl-9 pr-4 py-3 rounded-xl bg-background border border-border focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px] ${!newPlaceCoords && newPlaceAddress.length > 0 ? "border-amber-400 focus:border-amber-400" : ""}`} />
+                  
                   {showAddressSuggestions && addressSuggestions.length > 0 && (
                     <div className="absolute left-0 right-0 top-full mt-2 bg-card rounded-xl border border-border shadow-xl overflow-hidden max-h-48 overflow-y-auto">
                       {addressSuggestions.map((s, i) => (
@@ -399,6 +469,7 @@ export default function HomePage() {
                    <p className="text-[11px] text-amber-500 mt-1.5 ml-1">Please select an address from the dropdown list.</p>
                 )}
               </div>
+
               <button onClick={submitNewPlace} disabled={!newPlaceCoords || (savingPlaceLabel === "Custom" && !newPlaceName.trim()) || isSavingPlace} className="w-full py-3.5 mt-2 rounded-xl bg-[#00C9B1] text-white font-semibold hover:bg-[#00C9B1]/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                 {isSavingPlace ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</> : "Save & Use Location"}
               </button>
