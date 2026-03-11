@@ -48,6 +48,7 @@ export interface UserProfile {
   driverLicenseImage: string | null;
   vehiclePicture: string | null;
   isDriverVerified?: boolean;
+  savedPlaces?: { label: string; address: string; lat: number; lng: number }[];
 }
 
 export interface Notification {

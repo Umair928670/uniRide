@@ -36,7 +36,16 @@ const UserSchema = new Schema({
     year: { type: Number, default: 2000 },
     LicensePlate: { type: String, default: "" }
   },
-  isDriverVerified: { type: Boolean, default: false }
+  isDriverVerified: { type: Boolean, default: false },
+  savedPlaces: [
+    {
+      name: { type: String, required: true }, // e.g., "Home", "University", "Gym"
+      address: { type: String, required: true }, // e.g., "123 Main St"
+      lat: { type: Number },
+      lng: { type: Number },
+      icon: { type: String, default: "map-pin" } // So we can show a 🏠 or 🎓 icon!
+    }
+  ],
 });
 
 // If the model already exists, use it. Otherwise, create a new one.

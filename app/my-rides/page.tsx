@@ -61,7 +61,8 @@ export default function MyRidesPage() {
             seatsLeft: ride.availableSeats,
             totalSeats: ride.totalSeats,
             status: ride.status,
-            rawDate: new Date(ride.departureTime) 
+            rawDate: new Date(ride.departureTime),
+            driverId: ride.driver?._id || ride.driver
           };
         };
 

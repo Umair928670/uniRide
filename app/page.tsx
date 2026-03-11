@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useMemo, useEffect } from "react";
-import { MapPin, Circle, Home, GraduationCap,ArrowRight, Star, Search, ChevronUp, Navigation } from "lucide-react";
+import { MapPin, Circle, Home, GraduationCap, ArrowRight, Star, Search, ChevronUp, Navigation, X, Loader2, Plus, Bookmark } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import dynamic from 'next/dynamic';
 import Pusher from "pusher-js";
 import { getActiveRide } from "@/lib/actions/ride.actions";
+import { updateUser } from "@/lib/actions/user.actions";
 
 type MarkerType = "start" | "end" | "user" | "default";
 
@@ -14,6 +15,7 @@ type MapViewProps = {
   center: [number, number];
   zoom: number;
   markers: { position: [number, number]; type: MarkerType }[];
+  routePoints?: [number, number][];
   interactive?: boolean;
   darkMode?: boolean;
   className?: string;
@@ -24,18 +26,62 @@ const MapView = dynamic<MapViewProps>(
   { ssr: false }
 );
 
-const USER_LOCATION: [number, number] = [37.4275, -122.1697];
+const USER_LOCATION: [number, number] = [33.6844, 73.0479];
 
 export default function HomePage() {
   const router = useRouter();
-  const { availableRides, isDarkMode, savedPlaces } = useApp();
+  
+  const { user, availableRides, isDarkMode, updateProfile, addNotification } = useApp();
+  const savedPlaces = user?.savedPlaces || [];
+  
+  const customSavedPlaces = savedPlaces.filter((p: any) => p.name !== "Home" && p.name !== "University");
+
   const [sheetOpen, setSheetOpen] = useState(true);
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
   const [activeRide, setActiveRide] = useState<any>(null);
   const [liveLocation, setLiveLocation] = useState<{ lat: number, lng: number } | null>(null);
 
-  // 1. Check for an active ride when the home page loads
+  // Modal States
+  const [showSavedPlacesList, setShowSavedPlacesList] = useState(false);
+  const [savingPlaceLabel, setSavingPlaceLabel] = useState<string | null>(null);
+  
+  const [newPlaceName, setNewPlaceName] = useState(""); 
+  const [newPlaceAddress, setNewPlaceAddress] = useState("");
+  const [isSavingPlace, setIsSavingPlace] = useState(false);
+  
+  const [newPlaceCoords, setNewPlaceCoords] = useState<[number, number] | null>(null);
+  const [addressSuggestions, setAddressSuggestions] = useState<any[]>([]);
+  const [showAddressSuggestions, setShowAddressSuggestions] = useState(false);
+
+  // NEW: Store the real-world street route
+  const [roadRoute, setRoadRoute] = useState<[number, number][]>([]);
+
+  const searchLocation = async (query: string, setter: any) => {
+    if (query.length < 3) {
+      setter([]);
+      return;
+    }
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`);
+      const data = await res.json();
+      setter(data.map((item: any) => ({
+        name: item.display_name,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon)
+      })));
+    } catch (e) {
+      console.error("Geocoding error", e);
+    }
+  };
+
+  useEffect(() => {
+    const delay = setTimeout(() => {
+      if (newPlaceAddress && !newPlaceCoords) searchLocation(newPlaceAddress, setAddressSuggestions);
+    }, 800);
+    return () => clearTimeout(delay);
+  }, [newPlaceAddress, newPlaceCoords]);
+
   useEffect(() => {
     const checkActiveRide = async () => {
       const ride = await getActiveRide();
@@ -44,16 +90,39 @@ export default function HomePage() {
     checkActiveRide();
   }, []);
 
-  // 2. If there is an active ride, listen to Pusher!
+  // NEW: Fetch Real Road Routing via OSRM when an active ride loads!
   useEffect(() => {
     if (!activeRide) return;
+
+    const fetchRoadRoute = async () => {
+      try {
+        const { originCoords, destinationCoords } = activeRide;
+        // OSRM API expects longitude first, then latitude!
+        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${originCoords.lng},${originCoords.lat};${destinationCoords.lng},${destinationCoords.lat}?overview=full&geometries=geojson`);
+        const data = await res.json();
+
+        if (data.routes && data.routes.length > 0) {
+          // Leaflet expects [lat, lng], so we map it back
+          const coords = data.routes[0].geometry.coordinates.map((c: any) => [c[1], c[0]]);
+          setRoadRoute(coords);
+        }
+      } catch (error) {
+        console.error("Failed to fetch road route:", error);
+      }
+    };
+
+    fetchRoadRoute();
+  }, [activeRide]);
+
+  useEffect(() => {
+    if (!activeRide) return;
+    
 
     const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
       cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
     });
     const channel = pusher.subscribe(`ride-${activeRide._id}`);
 
-    // If I'm the passenger, listen for the driver
     channel.bind("driver-update", (data: { lat: number, lng: number }) => {
       setLiveLocation(data);
     });
@@ -64,7 +133,6 @@ export default function HomePage() {
     };
   }, [activeRide]);
 
-  // Show ride markers on the map
   const markers = useMemo(() => {
     const m: { position: [number, number]; type: MarkerType }[] = [
       { position: USER_LOCATION, type: "user" },
@@ -75,22 +143,46 @@ export default function HomePage() {
     if (!activeRide) {
       return m;
     }
-    // IF ACTIVE RIDE EXISTS: Take over the map!
     const markers: any[] = [
       { position: [activeRide.originCoords.lat, activeRide.originCoords.lng], type: "start" },
       { position: [activeRide.destinationCoords.lat, activeRide.destinationCoords.lng], type: "end" },
     ];
 
-    // Add the moving car or the latest known location from the database
     if (liveLocation) {
       markers.push({ position: [liveLocation.lat, liveLocation.lng], type: "user" });
     } else if (activeRide.currentLocation) {
-      // Fallback: If Pusher hasn't sent an update yet, show the last saved DB location
       markers.push({ position: [activeRide.currentLocation.lat, activeRide.currentLocation.lng], type: "user" });
     }
 
     return markers;
-  }, [activeRide, liveLocation]);
+  }, [activeRide, liveLocation, availableRides]);
+
+  // NEW: Calculate the dynamic full route line
+  const activeRoutePoints = useMemo(() => {
+    if (!activeRide) return undefined;
+
+    const points: [number, number][] = [];
+
+    // 1. Anchor the line to the car's current live location
+    if (liveLocation) {
+      points.push([liveLocation.lat, liveLocation.lng]);
+    } else if (activeRide.currentLocation) {
+      points.push([activeRide.currentLocation.lat, activeRide.currentLocation.lng]);
+    } else {
+      points.push([activeRide.originCoords.lat, activeRide.originCoords.lng]);
+    }
+
+    // 2. Append the real road shape to the destination
+    if (roadRoute.length > 0) {
+      points.push(...roadRoute);
+    } else {
+      // Fallback straight line just in case OSRM API is slow
+      points.push([activeRide.originCoords.lat, activeRide.originCoords.lng]);
+      points.push([activeRide.destinationCoords.lat, activeRide.destinationCoords.lng]);
+    }
+
+    return points as [number, number][];
+  }, [activeRide, liveLocation, roadRoute]);
 
   const handleFindRide = () => {
     const combined = [destination, pickup].filter(Boolean).join(" ");
@@ -99,10 +191,54 @@ export default function HomePage() {
     router.push(`/search?${params.toString()}`);
   };
 
-  const handleQuickPlace = (label: string) => {
-    const place = savedPlaces.find((p) => p.label === label);
+  const handleQuickPlace = (label: "Home" | "University") => {
+    const place = savedPlaces.find((p: any) => p.label === label);
     if (place) {
       setDestination(place.address);
+      addNotification("info", `${label} selected`);
+    } else {
+      setSavingPlaceLabel(label);
+      setNewPlaceAddress("");
+      setNewPlaceCoords(null);
+    }
+  };
+
+  const handleSelectCustomPlace = (address: string, label: string) => {
+    setDestination(address);
+    setShowSavedPlacesList(false);
+    addNotification("info", `${label} selected`);
+  };
+
+  const submitNewPlace = async () => {
+    const finalName = savingPlaceLabel === "Custom" ? newPlaceName : savingPlaceLabel;
+    
+    if (!newPlaceAddress.trim() || !finalName?.trim() || !user || !newPlaceCoords) return;
+    setIsSavingPlace(true);
+
+    try {
+      const newPlace = {
+        label: finalName,
+        address: newPlaceAddress,
+        lat: newPlaceCoords[0],
+        lng: newPlaceCoords[1]
+      };
+
+      const updatedPlaces = [...savedPlaces, newPlace];
+
+      await updateUser({ savedPlaces: updatedPlaces });
+      updateProfile({ savedPlaces: updatedPlaces });
+      
+      setDestination(newPlaceAddress);
+      addNotification("success", `${finalName} saved successfully!`);
+      
+      setSavingPlaceLabel(null);
+      setNewPlaceName("");
+      setNewPlaceAddress("");
+      setNewPlaceCoords(null);
+    } catch (error) {
+      addNotification("warning", "Failed to save place. Try again.");
+    } finally {
+      setIsSavingPlace(false);
     }
   };
 
@@ -119,19 +255,19 @@ export default function HomePage() {
            </div>
         </div>
       )}
-      {/* Interactive Map Background */}
+      
       <div className="absolute inset-0 z-0">
         <MapView
           center={USER_LOCATION}
           zoom={14}
           markers={markers}
+          routePoints={activeRoutePoints} 
           interactive={true}
           darkMode={isDarkMode}
           className="w-full h-full"
         />
       </div>
 
-      {/* Locate me button */}
       <button
         className="absolute top-20 right-4 z-20 w-11 h-11 bg-card rounded-xl shadow-lg border border-border flex items-center justify-center hover:bg-muted transition-colors"
         title="My Location"
@@ -139,20 +275,16 @@ export default function HomePage() {
         <Navigation className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
       </button>
 
-      {/* Bottom Sheet */}
       <div
-        className={`absolute bottom-0 left-0 right-0 z-30 transition-transform duration-500 ease-out ${sheetOpen ? "translate-y-0" : "translate-y-[calc(100%-64px)]"
-          }`}
+        className={`absolute bottom-0 left-0 right-0 z-30 transition-transform duration-500 ease-out ${sheetOpen ? "translate-y-0" : "translate-y-[calc(100%-64px)]"}`}
       >
-        {/* Drag Handle */}
         <button
           onClick={() => setSheetOpen(!sheetOpen)}
           className="w-full flex justify-center pt-2 pb-1"
         >
           <div className="flex flex-col items-center gap-0.5">
             <ChevronUp
-              className={`w-5 h-5 text-muted-foreground transition-transform ${sheetOpen ? "rotate-180" : ""
-                }`}
+              className={`w-5 h-5 text-muted-foreground transition-transform ${sheetOpen ? "rotate-180" : ""}`}
             />
             <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
           </div>
@@ -160,7 +292,7 @@ export default function HomePage() {
 
         <div className="bg-card rounded-t-3xl shadow-[0_-4px_30px_rgba(0,0,0,0.12)] max-w-lg mx-auto">
           <div className="px-5 pt-4 pb-28 space-y-4">
-            {/* Destination Input */}
+            
             <div className="relative">
               <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#00C9B1]" />
               <input
@@ -172,7 +304,6 @@ export default function HomePage() {
               />
             </div>
 
-            {/* Pickup Input */}
             <div className="relative">
               <Circle className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#1A3C6E]" />
               <input
@@ -184,7 +315,6 @@ export default function HomePage() {
               />
             </div>
 
-            {/* Quick Action Chips */}
             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
               <button
                 onClick={() => handleQuickPlace("Home")}
@@ -201,15 +331,14 @@ export default function HomePage() {
                 <span className="text-[13px]">University</span>
               </button>
               <button
-                onClick={() => handleQuickPlace("Gym")}
+                onClick={() => setShowSavedPlacesList(true)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95"
               >
-                <Star className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
+                <Bookmark className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
                 <span className="text-[13px]">Saved Places</span>
               </button>
             </div>
 
-            {/* Find Ride CTA */}
             <button
               onClick={handleFindRide}
               className="w-full py-4 rounded-2xl bg-[#1A3C6E] text-white font-semibold hover:bg-[#1A3C6E]/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#1A3C6E]/25"
@@ -220,6 +349,170 @@ export default function HomePage() {
           </div>
         </div>
       </div>
+
+      {showSavedPlacesList && (
+        <div className="fixed inset-0 z-[100] bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-card w-full max-w-sm rounded-3xl shadow-xl border border-border flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between p-4 border-b border-border">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                <Bookmark className="w-5 h-5 text-[#00C9B1]" />
+                Saved Places
+              </h3>
+              <button 
+                onClick={() => setShowSavedPlacesList(false)}
+                className="p-1.5 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto p-2">
+              {customSavedPlaces.length === 0 ? (
+                <div className="text-center py-8 px-4">
+                  <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
+                    <Star className="w-6 h-6 text-muted-foreground/40" />
+                  </div>
+                  <p className="font-medium text-muted-foreground">No places saved yet</p>
+                  <p className="text-[12px] text-muted-foreground/60 mt-1">Save your gym, work, or favorite spots to book rides faster.</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {customSavedPlaces.map((place: any, index: number) => (
+                    <button
+                      key={index}
+                      onClick={() => handleSelectCustomPlace(place.address, place.name)}
+                      className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-muted transition-colors text-left"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-[#1A3C6E]/10 dark:bg-[#00C9B1]/10 flex items-center justify-center shrink-0">
+                        <MapPin className="w-5 h-5 text-[#1A3C6E] dark:text-[#00C9B1]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-[14px]">{place.name}</p>
+                        <p className="text-[12px] text-muted-foreground truncate">{place.address}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-border bg-card rounded-b-3xl">
+              <button
+                onClick={() => {
+                  setShowSavedPlacesList(false);
+                  setSavingPlaceLabel("Custom");
+                  setNewPlaceName("");
+                  setNewPlaceAddress("");
+                  setNewPlaceCoords(null);
+                }}
+                className="w-full py-3.5 rounded-xl bg-muted text-foreground font-semibold hover:bg-muted/80 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+              >
+                <Plus className="w-4 h-4" /> Add New Place
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {savingPlaceLabel && (
+        <div className="fixed inset-0 z-[110] bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-card w-full max-w-sm rounded-3xl shadow-xl border border-border">
+            <div className="flex items-center justify-between p-4 border-b border-border">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                {savingPlaceLabel === "Home" ? <Home className="w-5 h-5 text-[#00C9B1]" /> :
+                 savingPlaceLabel === "University" ? <GraduationCap className="w-5 h-5 text-[#00C9B1]" /> :
+                 <Star className="w-5 h-5 text-[#00C9B1]" />}
+                {savingPlaceLabel === "Custom" ? "Add New Place" : `Save ${savingPlaceLabel}`}
+              </h3>
+              <button 
+                onClick={() => {
+                  setSavingPlaceLabel(null);
+                  setNewPlaceCoords(null);
+                }}
+                className="p-1.5 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-5 space-y-4">
+              {savingPlaceLabel === "Custom" && (
+                <div>
+                  <label className="text-[12px] font-semibold text-muted-foreground mb-1 block">Name of Place</label>
+                  <div className="relative">
+                    <Bookmark className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="e.g. Gym, Work, Cafe"
+                      value={newPlaceName}
+                      onChange={(e) => setNewPlaceName(e.target.value)}
+                      className="w-full pl-9 pr-4 py-3 rounded-xl bg-background border border-border focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="relative z-50">
+                <label className="text-[12px] font-semibold text-muted-foreground mb-1 block">Full Address</label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" />
+                  <input
+                    type="text"
+                    autoFocus={savingPlaceLabel !== "Custom"}
+                    placeholder="e.g. 123 Main St, City"
+                    value={newPlaceAddress}
+                    onChange={(e) => {
+                      setNewPlaceAddress(e.target.value);
+                      setNewPlaceCoords(null); 
+                      setShowAddressSuggestions(true);
+                    }}
+                    onFocus={() => setShowAddressSuggestions(true)}
+                    className={`w-full pl-9 pr-4 py-3 rounded-xl bg-background border border-border focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px] ${!newPlaceCoords && newPlaceAddress.length > 0 ? "border-amber-400 focus:border-amber-400" : ""}`}
+                  />
+                  
+                  {showAddressSuggestions && addressSuggestions.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-2 bg-card rounded-xl border border-border shadow-xl overflow-hidden max-h-48 overflow-y-auto">
+                      {addressSuggestions.map((s, i) => (
+                        <button
+                          key={i}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            const shortName = s.name.split(", ").slice(0, 3).join(", ");
+                            setNewPlaceAddress(shortName);
+                            setNewPlaceCoords([s.lat, s.lng]);
+                            setShowAddressSuggestions(false);
+                          }}
+                          className="w-full text-left px-4 py-3 text-[13px] hover:bg-muted transition-colors flex items-start gap-2 border-b border-border/50 last:border-0"
+                        >
+                          <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                          <span className="line-clamp-2">{s.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {!newPlaceCoords && newPlaceAddress.length > 0 && (
+                   <p className="text-[11px] text-amber-500 mt-1.5 ml-1">Please select an address from the dropdown list.</p>
+                )}
+              </div>
+
+              <button
+                onClick={submitNewPlace}
+                disabled={!newPlaceCoords || (savingPlaceLabel === "Custom" && !newPlaceName.trim()) || isSavingPlace}
+                className="w-full py-3.5 mt-2 rounded-xl bg-[#00C9B1] text-white font-semibold hover:bg-[#00C9B1]/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSavingPlace ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
+                ) : (
+                  "Save & Use Location"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

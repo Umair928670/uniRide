@@ -2,35 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 
-// Predefined location coordinates for the mock data
-export const LOCATION_COORDS: Record<string, [number, number]> = {
-  "Engineering Block": [37.4285, -122.1725],
-  "Downtown Metro": [37.4435, -122.164],
-  "Library Gate": [37.4265, -122.168],
-  "City Mall": [37.4455, -122.158],
-  "Sports Complex": [37.431, -122.175],
-  "Airport Terminal": [37.6213, -122.379],
-  "Hostel Block A": [37.425, -122.171],
-  "Central Station": [37.45, -122.14],
-  "Main Gate": [37.427, -122.165],
-  "Tech Park": [37.402, -122.148],
-  "Campus Gate": [37.4268, -122.166],
-  "Train Station": [37.4435, -122.1645],
-  Library: [37.4265, -122.168],
-  "Shopping Center": [37.448, -122.156],
-};
-
-export default function getRoutePoints(from: string, to: string): [number, number][] {
-  const start = LOCATION_COORDS[from];
-  const end = LOCATION_COORDS[to];
-  if (!start || !end) return [];
-
-  const midLat = (start[0] + end[0]) / 2 + (Math.random() - 0.5) * 0.005;
-  const midLng = (start[1] + end[1]) / 2 + (Math.random() - 0.5) * 0.005;
-
-  return [start, [midLat, midLng], end];
-}
-
 interface MapViewProps {
   center?: [number, number];
   zoom?: number;
@@ -42,7 +13,7 @@ interface MapViewProps {
 }
 
 export function MapView({
-  center = [37.4275, -122.1697],
+  center = [33.6844, 73.0479], // Defaulting center to Islamabad for your target market!
   zoom = 13,
   markers = [],
   routePoints,
@@ -50,7 +21,6 @@ export function MapView({
   interactive = true,
   darkMode = false,
 }: MapViewProps) {
-  // We use state to hold the Leaflet library so it never runs on the server
   const [L, setL] = useState<any>(null);
   
   const containerRef = useRef<HTMLDivElement>(null);
@@ -58,6 +28,9 @@ export function MapView({
   const markersLayerRef = useRef<any>(null);
   const polylineRef = useRef<any>(null);
   const tileLayerRef = useRef<any>(null);
+
+  // The Route Fingerprint Lock (prevents auto-zooming when car moves)
+  const lastBoundsKey = useRef<string>("");
 
   // 1. Load Leaflet ONLY on the client browser
   useEffect(() => {
@@ -68,7 +41,7 @@ export function MapView({
     }
   }, []);
 
-  // 2. Initialize map (Only runs once L is loaded)
+  // 2. Initialize map
   useEffect(() => {
     if (!L || !containerRef.current || mapRef.current) return;
 
@@ -94,7 +67,6 @@ export function MapView({
     tileLayerRef.current = tileLayer;
     markersLayerRef.current = markersLayer;
 
-    // Force a resize check after mount
     setTimeout(() => map.invalidateSize(), 100);
 
     return () => {
@@ -103,7 +75,6 @@ export function MapView({
       tileLayerRef.current = null;
       markersLayerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [L, interactive]);
 
   // 3. Update tile layer on dark mode change
@@ -117,13 +88,12 @@ export function MapView({
     tileLayerRef.current.setUrl(tileUrl);
   }, [darkMode, L]);
 
-  // 4. Update markers & Define Icons safely
+  // 4. Update markers & Manage Camera
   useEffect(() => {
     if (!L || !mapRef.current || !markersLayerRef.current) return;
 
     markersLayerRef.current.clearLayers();
 
-    // Safely defined inside the component where Leaflet (L) is guaranteed to exist
     const defaultIcon = L.icon({
       iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
       iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -148,7 +118,6 @@ export function MapView({
       iconAnchor: [10, 10],
     });
 
-    // The Passenger tracking icon (Blue Dot)
     const passengerIcon = L.divIcon({
       className: "custom-marker",
       html: `<div style="width:16px;height:16px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(66,133,244,0.25), 0 2px 8px rgba(0,0,0,0.3);"></div>`,
@@ -156,7 +125,6 @@ export function MapView({
       iconAnchor: [8, 8],
     });
 
-    // The Driver tracking icon (Car SVG)
     const userIcon = L.divIcon({
       className: "bg-transparent",
       html: `
@@ -180,23 +148,39 @@ export function MapView({
       switch (type) {
         case "start": return startIcon;
         case "end": return endIcon;
-        case "user": return userIcon;         // Maps to the Driver's Car
-        case "passenger": return passengerIcon; // Maps to the Passenger's Blue Dot
+        case "user": return userIcon;
+        case "passenger": return passengerIcon;
         default: return defaultIcon;
       }
     };
 
+    // Draw the markers
     markers.forEach((m) => {
       L.marker(m.position, { icon: getIcon(m.type) }).addTo(markersLayerRef.current!);
     });
 
-    // Fit bounds if multiple markers
-    if (markers.length >= 2) {
-      const bounds = L.latLngBounds(markers.map((m) => m.position));
-      mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
-    } else if (markers.length === 1) {
-      mapRef.current.setView(markers[0].position, 14);
+    // --- THE MAGIC FIX: Decouple camera movement from car movement ---
+    
+    // 1. Identify "anchor" markers (Start & End routes)
+    const anchorMarkers = markers.filter(m => m.type !== "user" && m.type !== "passenger");
+    
+    // 2. Create a unique fingerprint for this specific set of anchors
+    const currentRouteFingerprint = JSON.stringify(anchorMarkers.map(m => m.position));
+
+    // 3. Only recenter the camera if the anchors actually changed (or on first load)
+    if (lastBoundsKey.current !== currentRouteFingerprint && markers.length > 0) {
+      if (markers.length >= 2) {
+        // Frame ALL markers on the very first load so the car is in view!
+        const bounds = L.latLngBounds(markers.map((m) => m.position));
+        mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+      } else if (markers.length === 1) {
+        mapRef.current.setView(markers[0].position, 14);
+      }
+      
+      // Lock the camera!
+      lastBoundsKey.current = currentRouteFingerprint;
     }
+
   }, [markers, L]);
 
   // 5. Update polyline
@@ -210,10 +194,11 @@ export function MapView({
 
     if (routePoints && routePoints.length >= 2) {
       polylineRef.current = L.polyline(routePoints, {
-        color: "#1A3C6E",
-        weight: 4,
-        opacity: 0.8,
-        dashArray: "8, 12",
+        color: "#1A3C6E", // Solid Dark Blue
+        weight: 6,        // Thicker line
+        opacity: 0.9,     // Highly visible
+        lineCap: "round", // Smooth edges
+        lineJoin: "round" // Smooth corners when turning on a street
       }).addTo(mapRef.current);
     }
   }, [routePoints, L]);

@@ -8,7 +8,7 @@ import { RideCard } from "@/components/ride-card";
 import { getAvailableRides } from "@/lib/actions/ride.actions";
 import dynamic from "next/dynamic";
 
-const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView || mod.default), { 
+const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView ), { 
   ssr: false 
 });
 
@@ -71,7 +71,8 @@ function SearchContent() {
             seatsLeft: ride.availableSeats,
             totalSeats: ride.totalSeats,
             status: ride.status,
-            rawDate: new Date(ride.departureTime) 
+            rawDate: new Date(ride.departureTime),
+            driverId: ride.driver?._id || ride.driver
           };
         });
 
