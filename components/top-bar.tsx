@@ -12,19 +12,19 @@ interface TopBarProps {
 
 export function TopBar({ transparent = false }: TopBarProps) {
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = usePathname() || "";
   const { user, appNotifications } = useApp();
 
-  const hiddenPaths = [
-    "/notifications",
-    "/settings",
-    "/help",
-    "/search",
-    "/offer-ride",
-    "/ride/[id]"
-  ];
+  const lowerPath = pathname.toLowerCase();
 
- const isHidden = hiddenPaths.some((path) => path === pathname) || pathname.startsWith("/ride/");
+  // 2. Use .includes() to catch the keyword regardless of slashes or exact spelling
+  const isHidden = 
+    lowerPath.includes("notification") ||
+    lowerPath.includes("setting") ||
+    lowerPath.includes("help") ||
+    lowerPath.includes("search") ||
+    lowerPath.includes("ride/") || // Catches dynamic /ride/[id] routes
+    lowerPath.includes("offer");   // PERMANENT FIX: Catches /offer-ride, /OfferRide, etc.
 
   if (isHidden) {
     return null;

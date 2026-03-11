@@ -24,18 +24,18 @@ import {
 import { useApp } from "@/components/app-context";
 import { useRouter } from "next/navigation";
 
-const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView), { 
-  ssr: false 
+const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView), {
+  ssr: false
 });
 
 export default function OfferRidePage() {
   const { offerRide, isDarkMode, isDriverVerified, user, addNotification } = useApp();
   const router = useRouter();
-  
+
   // Text inputs
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  
+
   // NEW: Store actual real-world coordinates!
   const [fromCoords, setFromCoords] = useState<[number, number] | null>(null);
   const [toCoords, setToCoords] = useState<[number, number] | null>(null);
@@ -45,7 +45,7 @@ export default function OfferRidePage() {
   const [seats, setSeats] = useState(2);
   const [price, setPrice] = useState("");
   const [uniOnly, setUniOnly] = useState(true);
-  
+
   const [submitted, setSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -98,27 +98,27 @@ export default function OfferRidePage() {
       addNotification("warning", "Geolocation is not supported by your browser");
       return;
     }
-    
+
     setIsLocating(true);
     setFrom("Finding your location...");
     setShowFromSuggestions(false);
 
     navigator.geolocation.getCurrentPosition(async (position) => {
       const { latitude, longitude } = position.coords;
-      
+
       try {
         // Reverse Geocoding: Turn coordinates into a real street name
         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
         const data = await res.json();
-        
+
         // Clean up the massive address string OpenStreetMap sometimes returns
         const addressParts = data.display_name.split(", ");
-        const shortAddress = addressParts.slice(0, 3).join(", "); 
-        
+        const shortAddress = addressParts.slice(0, 3).join(", ");
+
         setFrom(shortAddress || "Current Location");
         setFromCoords([latitude, longitude]);
         setErrors((p) => ({ ...p, from: "" }));
-      } catch(e) {
+      } catch (e) {
         // Fallback if the API fails
         setFrom("Current Location");
         setFromCoords([latitude, longitude]);
@@ -245,8 +245,8 @@ export default function OfferRidePage() {
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <h1 className="text-[18px]">Offer a Ride</h1>
-              <p className="text-muted-foreground text-[12px]">Share your ride with fellow students</p>
+              <h1 className="text-[14px]">Offer a Ride</h1>
+              <p className="text-muted-foreground text-[10px]">Share your ride with fellow students</p>
             </div>
           </div>
         </div>
@@ -265,7 +265,7 @@ export default function OfferRidePage() {
           {/* Checklist */}
           <div className="bg-card rounded-2xl border border-border p-4 space-y-3 mb-6">
             <p className="text-[12px] text-muted-foreground font-medium uppercase tracking-wide">Required Documents</p>
-            
+
             <div className={`flex items-center gap-3 p-3 rounded-xl ${missingLicense ? "bg-red-500/5 border border-red-500/15" : "bg-green-500/5 border border-green-500/15"}`}>
               <FileText className={`w-5 h-5 shrink-0 ${missingLicense ? "text-red-500" : "text-green-500"}`} />
               <div className="flex-1">
@@ -319,7 +319,7 @@ export default function OfferRidePage() {
 
       <div className="max-w-lg mx-auto px-4 pt-5">
         <div className="space-y-4">
-          
+
           {/* ─── Route Section ─── */}
           <div className="bg-card rounded-2xl border border-border p-4 space-y-3">
             <p className="text-[13px] text-muted-foreground flex items-center gap-1.5">
@@ -344,7 +344,7 @@ export default function OfferRidePage() {
                   className={`w-full pl-10 pr-4 py-3 rounded-xl bg-background border ${errors.from ? "border-red-400" : "border-border"} focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all text-[14px]`}
                 />
               </div>
-              
+
               {/* FROM Suggestions Dropdown */}
               {showFromSuggestions && (
                 <div className="absolute left-0 right-0 top-full mt-1 bg-card rounded-xl border border-border shadow-lg overflow-hidden max-h-48 overflow-y-auto">
@@ -435,6 +435,8 @@ export default function OfferRidePage() {
             <div className="bg-card rounded-2xl border border-border overflow-hidden">
               <div className="h-36 sm:h-44">
                 <MapView
+                  center={fromCoords ? [fromCoords[0], fromCoords[1]] : [33.6844, 73.0479]}
+                  zoom={12}
                   markers={mapMarkers}
                   routePoints={routePoints}
                   darkMode={isDarkMode}

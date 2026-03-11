@@ -276,7 +276,8 @@ export default function RideDetailPage() {
     <div className="min-h-full bg-background pb-24">
       {/* Map Preview */}
       <div className="relative h-56 sm:h-72">
-        <MapView markers={mapMarkers} routePoints={routePoints} darkMode={isDarkMode} interactive={true} className="w-full h-full" />
+        <MapView  center={ride?.fromCoords ? [ride.fromCoords[0], ride.fromCoords[1]] : [33.6844, 73.0479]}
+                  zoom={12} markers={mapMarkers} routePoints={routePoints} darkMode={isDarkMode} interactive={true} className="w-full h-full" />
         <div className="absolute inset-0 bg-gradient-to-b from-black/20 to-transparent pointer-events-none" />
         <button onClick={() => router.back()} className="absolute top-4 left-4 w-10 h-10 rounded-xl bg-white/90 dark:bg-[#161B22]/90 backdrop-blur flex items-center justify-center shadow-sm z-10">
           <ArrowLeft className="w-5 h-5" />

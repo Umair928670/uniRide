@@ -241,6 +241,8 @@ function SearchContent() {
         <div className="max-w-lg mx-auto w-full px-4 pt-3">
           <div className="h-64 sm:h-80 rounded-2xl overflow-hidden border border-border">
             <MapView
+             center={filteredRides.length > 0 && filteredRides[0].fromCoords ? [filteredRides[0].fromCoords[0], filteredRides[0].fromCoords[1]] : [33.6844, 73.0479]}
+                  zoom={12}
               markers={mapMarkers}
               darkMode={isDarkMode}
               interactive={true}

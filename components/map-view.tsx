@@ -1,207 +1,186 @@
 'use client';
 
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useEffect, useRef } from 'react';
+import Map, { Marker, Source, Layer, MapRef } from 'react-map-gl/maplibre';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import { Car, Loader2 } from 'lucide-react';
 
-interface MapViewProps {
-  center?: [number, number];
-  zoom?: number;
-  markers?: { position: [number, number]; type: "start" | "end" | "user" | "passenger" | "default" }[];
+type MarkerType = "start" | "end" | "user" | "default";
+
+type MapViewProps = {
+  center: [number, number];
+  zoom: number;
+  markers: { position: [number, number]; type: MarkerType }[];
   routePoints?: [number, number][];
-  className?: string;
   interactive?: boolean;
   darkMode?: boolean;
-}
+  className?: string;
+};
 
-export function MapView({
-  center = [33.6844, 73.0479], // Defaulting center to Islamabad for your target market!
-  zoom = 13,
-  markers = [],
-  routePoints,
-  className = "",
-  interactive = true,
-  darkMode = false,
+export function MapView({ 
+  center, 
+  zoom, 
+  markers, 
+  routePoints, 
+  interactive = false, 
+  darkMode = false, 
+  className 
 }: MapViewProps) {
-  const [L, setL] = useState<any>(null);
   
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const markersLayerRef = useRef<any>(null);
-  const polylineRef = useRef<any>(null);
-  const tileLayerRef = useRef<any>(null);
+  const mapRef = useRef<MapRef>(null);
 
-  // The Route Fingerprint Lock (prevents auto-zooming when car moves)
-  const lastBoundsKey = useRef<string>("");
+  // 1. CRASH PROTECTION: Ensure center exists and is valid
+  const validCenter = useMemo(() => {
+    if (Array.isArray(center) && center.length === 2 && !isNaN(center[0]) && !isNaN(center[1])) {
+      return [center[1], center[0]]; // MapLibre needs [lng, lat]
+    }
+    return [73.0479, 33.6844]; // Fallback to Islamabad
+  }, [center]);
 
-  // 1. Load Leaflet ONLY on the client browser
+  // 2. ROUTE LOGIC: Fixed to handle Offer Ride preview lines
+  const geojsonRoute = useMemo(() => {
+    // Only draw if we have at least 2 valid points
+    if (!routePoints || !Array.isArray(routePoints) || routePoints.length < 2) return null;
+    
+    // Filter out any invalid points to prevent WebGL errors
+    const coords = routePoints
+      .filter(p => Array.isArray(p) && p.length === 2)
+      .map(p => [p[1], p[0]]); // Swap to [lng, lat]
+
+    if (coords.length < 2) return null;
+
+    return {
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'LineString',
+        coordinates: coords
+      }
+    };
+  }, [routePoints]);
+
+  // 3. AUTO-FIT: In Ride Details, make the map show the whole route automatically
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      import("leaflet").then((leaflet) => {
-        setL(leaflet.default ? leaflet.default : leaflet);
+    if (mapRef.current && routePoints && routePoints.length >= 2) {
+      const lats = routePoints.map(p => p[0]);
+      const lngs = routePoints.map(p => p[1]);
+      const minLng = Math.min(...lngs);
+      const minLat = Math.min(...lats);
+      const maxLng = Math.max(...lngs);
+      const maxLat = Math.max(...lats);
+
+      mapRef.current.fitBounds(
+        [[minLng, minLat], [maxLng, maxLat]],
+        { padding: 40, duration: 1000 }
+      );
+    } else if (mapRef.current) {
+      mapRef.current.flyTo({
+        center: [validCenter[0], validCenter[1]],
+        zoom: zoom,
+        duration: 1000
       });
     }
-  }, []);
+  }, [validCenter, zoom, routePoints]);
 
-  // 2. Initialize map
-  useEffect(() => {
-    if (!L || !containerRef.current || mapRef.current) return;
+  const mapStyle = darkMode
+    ? "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+    : "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json";
 
-    const map = L.map(containerRef.current, {
-      center,
-      zoom,
-      zoomControl: false,
-      attributionControl: false,
-      dragging: interactive,
-      scrollWheelZoom: interactive,
-      doubleClickZoom: interactive,
-      touchZoom: interactive,
-    });
+  return (
+    <div className={`relative w-full h-full overflow-hidden ${className || ''}`}>
+      <Map
+        ref={mapRef}
+        initialViewState={{
+          longitude: validCenter[0],
+          latitude: validCenter[1],
+          zoom: zoom,
+          pitch: 40,
+        }}
+        mapStyle={mapStyle}
+        style={{ width: '100%', height: '100%' }}
+        interactive={interactive}
+        dragRotate={interactive}
+        touchZoomRotate={interactive}
+        attributionControl={false}
+      >
+        
+        {geojsonRoute && (
+          <Source id="route" type="geojson" data={geojsonRoute as any}>
+            <Layer
+              id="route-line-blur"
+              type="line"
+              paint={{
+                "line-color": darkMode ? "#00C9B1" : "#1A3C6E",
+                "line-width": 6,
+                "line-opacity": 0.3,
+                "line-blur": 3
+              }}
+            />
+            <Layer
+              id="route-line"
+              type="line"
+              layout={{ "line-join": "round", "line-cap": "round" }}
+              paint={{
+                "line-color": darkMode ? "#00C9B1" : "#1A3C6E",
+                "line-width": 3,
+              }}
+            />
+          </Source>
+        )}
 
-    const tileUrl = darkMode
-      ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-      : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+        {/* --- DYNAMIC MARKERS --- */}
+        {markers.map((marker, idx) => {
+          if (!marker.position || isNaN(marker.position[0])) return null;
+          
+          return (
+            <Marker 
+              key={idx} 
+              longitude={marker.position[1]} 
+              latitude={marker.position[0]} 
+              anchor="center"
+            >
+              <div className="relative flex items-center justify-center">
+                
+                {/* 1. PASSENGER PICKUP (Green Dot) */}
+                {marker.type === "start" && (
+                  <div className="flex flex-col items-center">
+                    <div className="w-5 h-5 bg-[#00C9B1] rounded-full border-2 border-white shadow-lg flex items-center justify-center">
+                       <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                    </div>
+                  </div>
+                )}
 
-    const tileLayer = L.tileLayer(tileUrl).addTo(map);
-    const markersLayer = L.layerGroup().addTo(map);
+                {/* 2. DESTINATION (Red Dot) */}
+                {marker.type === "end" && (
+                  <div className="flex flex-col items-center">
+                    <div className="w-5 h-5 bg-red-500 rounded-full border-2 border-white shadow-lg flex items-center justify-center">
+                       <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                    </div>
+                  </div>
+                )}
 
-    mapRef.current = map;
-    tileLayerRef.current = tileLayer;
-    markersLayerRef.current = markersLayer;
+                {/* 3. MOVING DRIVER (Glowing Car) */}
+                {marker.type === "user" && (
+                  <div className="relative flex items-center justify-center">
+                    {/* The "Glow" Pulse Effect from Leaflet */}
+                    <div className="absolute w-12 h-12 bg-blue-500/20 rounded-full animate-ping" />
+                    <div className="absolute w-8 h-8 bg-blue-500/30 rounded-full animate-pulse" />
+                    
+                    {/* The Car Icon Container */}
+                    <div className="relative bg-[#1A3C6E] p-1.5 rounded-xl border-2 border-white shadow-2xl z-10 transition-all duration-500">
+                      <Car className="w-5 h-5 text-white" />
+                    </div>
 
-    setTimeout(() => map.invalidateSize(), 100);
+                    {/* Directional Indicator */}
+                    <div className="absolute -top-1 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-b-[8px] border-b-[#1A3C6E] z-20" />
+                  </div>
+                )}
 
-    return () => {
-      map.remove();
-      mapRef.current = null;
-      tileLayerRef.current = null;
-      markersLayerRef.current = null;
-    };
-  }, [L, interactive]);
-
-  // 3. Update tile layer on dark mode change
-  useEffect(() => {
-    if (!L || !mapRef.current || !tileLayerRef.current) return;
-
-    const tileUrl = darkMode
-      ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-      : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-
-    tileLayerRef.current.setUrl(tileUrl);
-  }, [darkMode, L]);
-
-  // 4. Update markers & Manage Camera
-  useEffect(() => {
-    if (!L || !mapRef.current || !markersLayerRef.current) return;
-
-    markersLayerRef.current.clearLayers();
-
-    const defaultIcon = L.icon({
-      iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-      iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-      shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-      iconSize: [25, 41],
-      iconAnchor: [12, 41],
-      popupAnchor: [1, -34],
-      shadowSize: [41, 41],
-    });
-
-    const startIcon = L.divIcon({
-      className: "custom-marker",
-      html: `<div style="width:20px;height:20px;background:#1A3C6E;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>`,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10],
-    });
-
-    const endIcon = L.divIcon({
-      className: "custom-marker",
-      html: `<div style="width:20px;height:20px;background:#00C9B1;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>`,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10],
-    });
-
-    const passengerIcon = L.divIcon({
-      className: "custom-marker",
-      html: `<div style="width:16px;height:16px;background:#4285F4;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(66,133,244,0.25), 0 2px 8px rgba(0,0,0,0.3);"></div>`,
-      iconSize: [16, 16],
-      iconAnchor: [8, 8],
-    });
-
-    const userIcon = L.divIcon({
-      className: "bg-transparent",
-      html: `
-        <div class="relative flex items-center justify-center w-10 h-10">
-          <div class="absolute inset-0 rounded-full bg-[#00C9B1] animate-ping opacity-20"></div>
-          <div class="relative z-10 flex items-center justify-center w-8 h-8 bg-white border-2 border-[#1A3C6E] rounded-full shadow-md text-[#1A3C6E]">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/>
-              <circle cx="7" cy="17" r="2"/>
-              <path d="M9 17h6"/>
-              <circle cx="17" cy="17" r="2"/>
-            </svg>
-          </div>
-        </div>
-      `,
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
-    });
-
-    const getIcon = (type: string) => {
-      switch (type) {
-        case "start": return startIcon;
-        case "end": return endIcon;
-        case "user": return userIcon;
-        case "passenger": return passengerIcon;
-        default: return defaultIcon;
-      }
-    };
-
-    // Draw the markers
-    markers.forEach((m) => {
-      L.marker(m.position, { icon: getIcon(m.type) }).addTo(markersLayerRef.current!);
-    });
-
-    // --- THE MAGIC FIX: Decouple camera movement from car movement ---
-    
-    // 1. Identify "anchor" markers (Start & End routes)
-    const anchorMarkers = markers.filter(m => m.type !== "user" && m.type !== "passenger");
-    
-    // 2. Create a unique fingerprint for this specific set of anchors
-    const currentRouteFingerprint = JSON.stringify(anchorMarkers.map(m => m.position));
-
-    // 3. Only recenter the camera if the anchors actually changed (or on first load)
-    if (lastBoundsKey.current !== currentRouteFingerprint && markers.length > 0) {
-      if (markers.length >= 2) {
-        // Frame ALL markers on the very first load so the car is in view!
-        const bounds = L.latLngBounds(markers.map((m) => m.position));
-        mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
-      } else if (markers.length === 1) {
-        mapRef.current.setView(markers[0].position, 14);
-      }
-      
-      // Lock the camera!
-      lastBoundsKey.current = currentRouteFingerprint;
-    }
-
-  }, [markers, L]);
-
-  // 5. Update polyline
-  useEffect(() => {
-    if (!L || !mapRef.current) return;
-
-    if (polylineRef.current) {
-      polylineRef.current.remove();
-      polylineRef.current = null;
-    }
-
-    if (routePoints && routePoints.length >= 2) {
-      polylineRef.current = L.polyline(routePoints, {
-        color: "#1A3C6E", // Solid Dark Blue
-        weight: 6,        // Thicker line
-        opacity: 0.9,     // Highly visible
-        lineCap: "round", // Smooth edges
-        lineJoin: "round" // Smooth corners when turning on a street
-      }).addTo(mapRef.current);
-    }
-  }, [routePoints, L]);
-
-  return <div ref={containerRef} className={className} style={{ width: "100%", height: "100%", zIndex: 0 }} />;
+              </div>
+            </Marker>
+          );
+        })}
+      </Map>
+    </div>
+  );
 }

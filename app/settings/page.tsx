@@ -40,9 +40,7 @@ function SettingsContent() {
   const initialSection = (searchParams.get("section") as Section) || "main";
   const [section, setSection] = useState<Section>(initialSection);
 
-  // NEW: Check if the user is allowed to see vehicle settings
-  const baseRole = user?.role || "both";
-  const showVehicleSettings = baseRole === "driver" || baseRole === "both";
+ const showVehicleSettings = activeRole === "driver";
 
   // NEW: Security check. If a passenger tries to force the URL to the vehicle section, kick them back.
   useEffect(() => {
@@ -91,7 +89,6 @@ function SettingsContent() {
                     : "Not set up"
                 }
                 onClick={() => setSection("vehicle")}
-                badge={activeRole !== "passenger" ? "Driver" : undefined}
               />
             </>
           )}

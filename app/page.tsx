@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useMemo, useEffect } from "react";
-import { MapPin, Circle, Home, GraduationCap, ArrowRight, Star, Search, ChevronUp, Navigation, X, Loader2, Plus, Bookmark, Edit2 } from "lucide-react";
+// NEW: Added the 'Car' icon for the Driver Dashboard
+import { MapPin, Circle, Home, GraduationCap, ArrowRight, Star, Search, ChevronUp, Navigation, X, Loader2, Plus, Bookmark, Edit2, Car } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import dynamic from 'next/dynamic';
@@ -31,11 +32,13 @@ const DEFAULT_LOCATION: [number, number] = [33.6844, 73.0479];
 export default function HomePage() {
   const router = useRouter();
   
-  const { user, availableRides, isDarkMode, updateProfile, addNotification } = useApp();
+  const { user, availableRides, isDarkMode, updateProfile, addNotification, activeRole } = useApp();
   const savedPlaces = user?.savedPlaces || [];
   
-  // --- STRICT FRONTEND FILTER ---
-  // This physically removes Home and University from the array before the modal can render them
+  // --- NEW: INTELLIGENT ROLE DETECTION ---
+  // If their database role is 'driver' OR they toggled into driver mode, adapt the UI!
+  const isDriverMode = user?.role === "driver" || activeRole === "driver";
+  
   const customSavedPlaces = savedPlaces.filter((p: any) => {
     const identifier = p.label || p.name;
     return identifier !== "Home" && identifier !== "University";
@@ -43,7 +46,6 @@ export default function HomePage() {
   
   const homePlace = savedPlaces.find((p: any) => (p.label || p.name) === "Home");
   const uniPlace = savedPlaces.find((p: any) => (p.label || p.name) === "University");
-  // ------------------------------
 
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_LOCATION);
   const [mapZoom, setMapZoom] = useState(13);
@@ -220,7 +222,6 @@ export default function HomePage() {
     
     if (!newPlaceAddress.trim() || !finalLabel?.trim() || !user || !newPlaceCoords) return;
 
-    // --- FRONTEND UNIQUENESS VALIDATOR ---
     const isEditing = savedPlaces.some((p: any) => (p.label || p.name) === finalLabel);
 
     if (savingPlaceLabel === "Custom" && !isEditing) {
@@ -242,7 +243,6 @@ export default function HomePage() {
         return;
       }
     }
-    // -------------------------------------
 
     setIsSavingPlace(true);
 
@@ -326,53 +326,59 @@ export default function HomePage() {
         </button>
 
         <div className="bg-card rounded-t-3xl shadow-[0_-4px_30px_rgba(0,0,0,0.12)] max-w-lg mx-auto">
-          <div className="px-5 pt-4 pb-28 space-y-4">
-            
-            <div className="relative">
-              <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#00C9B1]" />
-              <input type="text" placeholder="Where are you going?" value={destination} onChange={(e) => setDestination(e.target.value)} className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#1C2333] border border-border focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all placeholder:text-muted-foreground" />
-            </div>
-            
-            <div className="relative">
-              <Circle className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#1A3C6E]" />
-              <input type="text" placeholder="Pickup point" value={pickup} onChange={(e) => setPickup(e.target.value)} className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#1C2333] border border-border focus:border-[#1A3C6E] focus:ring-2 focus:ring-[#1A3C6E]/20 outline-none transition-all placeholder:text-muted-foreground" />
-            </div>
-
-            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-              <div className="flex items-center bg-[#F5F7FA] dark:bg-[#1C2333] border border-border rounded-full overflow-hidden hover:border-[#00C9B1] transition-colors shrink-0">
-                <button onClick={() => handleQuickPlace("Home")} className="flex items-center gap-1.5 pl-4 pr-3 py-2 hover:bg-muted/50 transition-colors active:scale-95">
-                  <Home className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Home</span>
-                </button>
-                {homePlace && (
-                  <button onClick={() => handleEditPlace("Home")} className="pr-3 pl-2 py-2 border-l border-border hover:bg-muted/50 transition-colors text-muted-foreground hover:text-[#00C9B1]" title="Edit Home Address">
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
+          
+          {/* --- THE ROLE-AWARE SPLIT UI --- */}
+          {!isDriverMode && (
+            /* 2. PASSENGER SEARCH (Standard Find Ride flow) */
+            <div className="px-5 pt-4 pb-28 space-y-4">
+              <div className="relative">
+                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#00C9B1]" />
+                <input type="text" placeholder="Where are you going?" value={destination} onChange={(e) => setDestination(e.target.value)} className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#1C2333] border border-border focus:border-[#00C9B1] focus:ring-2 focus:ring-[#00C9B1]/20 outline-none transition-all placeholder:text-muted-foreground" />
+              </div>
+              
+              <div className="relative">
+                <Circle className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#1A3C6E]" />
+                <input type="text" placeholder="Pickup point" value={pickup} onChange={(e) => setPickup(e.target.value)} className="w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#1C2333] border border-border focus:border-[#1A3C6E] focus:ring-2 focus:ring-[#1A3C6E]/20 outline-none transition-all placeholder:text-muted-foreground" />
               </div>
 
-              <div className="flex items-center bg-[#F5F7FA] dark:bg-[#1C2333] border border-border rounded-full overflow-hidden hover:border-[#00C9B1] transition-colors shrink-0">
-                <button onClick={() => handleQuickPlace("University")} className="flex items-center gap-1.5 pl-4 pr-3 py-2 hover:bg-muted/50 transition-colors active:scale-95">
-                  <GraduationCap className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">University</span>
-                </button>
-                {uniPlace && (
-                  <button onClick={() => handleEditPlace("University")} className="pr-3 pl-2 py-2 border-l border-border hover:bg-muted/50 transition-colors text-muted-foreground hover:text-[#00C9B1]" title="Edit University Address">
-                    <Edit2 className="w-3.5 h-3.5" />
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                <div className="flex items-center bg-[#F5F7FA] dark:bg-[#1C2333] border border-border rounded-full overflow-hidden hover:border-[#00C9B1] transition-colors shrink-0">
+                  <button onClick={() => handleQuickPlace("Home")} className="flex items-center gap-1.5 pl-4 pr-3 py-2 hover:bg-muted/50 transition-colors active:scale-95">
+                    <Home className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Home</span>
                   </button>
-                )}
+                  {homePlace && (
+                    <button onClick={() => handleEditPlace("Home")} className="pr-3 pl-2 py-2 border-l border-border hover:bg-muted/50 transition-colors text-muted-foreground hover:text-[#00C9B1]" title="Edit Home Address">
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center bg-[#F5F7FA] dark:bg-[#1C2333] border border-border rounded-full overflow-hidden hover:border-[#00C9B1] transition-colors shrink-0">
+                  <button onClick={() => handleQuickPlace("University")} className="flex items-center gap-1.5 pl-4 pr-3 py-2 hover:bg-muted/50 transition-colors active:scale-95">
+                    <GraduationCap className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">University</span>
+                  </button>
+                  {uniPlace && (
+                    <button onClick={() => handleEditPlace("University")} className="pr-3 pl-2 py-2 border-l border-border hover:bg-muted/50 transition-colors text-muted-foreground hover:text-[#00C9B1]" title="Edit University Address">
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <button onClick={() => setShowSavedPlacesList(true)} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95 shrink-0">
+                  <Bookmark className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Saved Places</span>
+                </button>
               </div>
 
-              <button onClick={() => setShowSavedPlacesList(true)} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F5F7FA] dark:bg-[#1C2333] border border-border hover:border-[#00C9B1] transition-colors whitespace-nowrap active:scale-95 shrink-0">
-                <Bookmark className="w-4 h-4 text-[#1A3C6E] dark:text-[#00C9B1]" /> <span className="text-[13px]">Saved Places</span>
+              <button onClick={handleFindRide} className="w-full py-4 rounded-2xl bg-[#1A3C6E] text-white font-semibold hover:bg-[#1A3C6E]/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#1A3C6E]/25">
+                <Search className="w-5 h-5" /> Find Ride
               </button>
             </div>
-
-            <button onClick={handleFindRide} className="w-full py-4 rounded-2xl bg-[#1A3C6E] text-white font-semibold hover:bg-[#1A3C6E]/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#1A3C6E]/25">
-              <Search className="w-5 h-5" /> Find Ride
-            </button>
-          </div>
+          )}
+          {/* ------------------------------------- */}
         </div>
       </div>
 
+      {/* --- MODALS BELOW REMAIN EXACTLY THE SAME --- */}
       {showSavedPlacesList && (
         <div className="fixed inset-0 z-[100] bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-card w-full max-w-sm rounded-3xl shadow-xl border border-border flex flex-col max-h-[80vh]">

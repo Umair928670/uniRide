@@ -4,6 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from "react";
 import { Ride, MOCK_RIDES, PAST_RIDES, AVATARS } from "./mock-data";
 import { broadcastLocation } from "@/lib/actions/location.actions"; 
+import { useRouter } from "next/navigation";
 
 export type UserRole = "passenger" | "driver" | "both";
 
@@ -143,9 +144,32 @@ const INITIAL_APP_NOTIFICATIONS: AppNotification[] = [
 const AppContext = createContext<AppState | null>(null);
 
 export function AppProvider({ children, initialUser }: AppProviderProps) {
+  const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [user, setUser] = useState<UserProfile>(initialUser);
-  const [activeRole, setActiveRole] = useState<UserRole>("both");
+  
+  // const [activeRole, setActiveRole] = useState<UserRole>(() => {
+  //   if (typeof window !== "undefined") {
+  //     const saved = localStorage.getItem("uniRide_activeMode");
+  //     if (saved) return saved as UserRole;
+  //   }
+  //   return initialUser?.role === "both" ? "passenger" : (initialUser?.role || "passenger");
+  // });
+
+  const [activeRole, setActiveRole] = useState<UserRole>(
+    initialUser?.role === "both" ? "passenger" : (initialUser?.role || "passenger")
+  );
+
+  // 2. Read from browser memory safely AFTER the initial render
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("uniRide_activeMode");
+      if (saved === "driver" || saved === "passenger") {
+        setActiveRole(saved);
+      }
+    }
+  }, []);
+  
   const [availableRides, setAvailableRides] = useState<Ride[]>(MOCK_RIDES);
   const [myUpcomingRides, setMyUpcomingRides] = useState<Ride[]>([]);
   const [myPastRides, setMyPastRides] = useState<Ride[]>(PAST_RIDES);
@@ -156,20 +180,40 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
   const { isLoaded, isSignedIn, signOut } = useAuth();
 
-
   useEffect(() => {
     // If Clerk's frontend thinks we are logged in, BUT the server returned null 
     // (because the user was deleted or the DB failed), the session is corrupted.
     if (isLoaded && isSignedIn && !initialUser) {
       console.log("Dead session detected. Automatically logging out...");
       // Silently kill the dead cookie and send them back to the login screen
-      signOut({ redirectUrl: '/login' }); 
+      signOut().then(() => {
+        router.push('/login');
+      });
     }
-  }, [isLoaded, isSignedIn, initialUser, signOut]);
+  }, [isLoaded, isSignedIn, initialUser, signOut, router]);
   // Global Tracking States
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [activeTrackingRideId, setActiveTrackingRideId] = useState<string | null>(null);
   const [liveLocation, setLiveLocation] = useState<{ lat: number, lng: number } | null>(null); // <--- ADDED THIS
+
+  // 2. Automatically load their last saved preference from the browser memory
+  useEffect(() => {
+    if (initialUser?.role === "both") {
+      const savedMode = localStorage.getItem("uniRide_activeMode") as UserRole;
+      if (savedMode === "driver" || savedMode === "passenger") {
+        setActiveRole(savedMode);
+      }
+    }
+  }, [initialUser]);
+
+  // 3. Save the choice to browser memory every time they flip the switch
+  const switchRole = useCallback((role: UserRole) => {
+    setActiveRole(role);
+    // Saves to browser memory so it remembers if you refresh!
+    if (typeof window !== 'undefined') {
+      localStorage.setItem("uniRide_activeMode", role); 
+    }
+  }, []);
 
   // 1. On Mount: Check if we were tracking before the refresh
   useEffect(() => {
@@ -336,10 +380,6 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
       }
       return next;
     });
-  }, []);
-
-  const switchRole = useCallback((role: UserRole) => {
-    setActiveRole(role);
   }, []);
 
   const updateProfile = useCallback((updates: Partial<UserProfile>) => {

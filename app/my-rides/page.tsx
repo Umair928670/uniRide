@@ -1,26 +1,33 @@
 'use client';
 
 import { useState, useEffect } from "react";
-import { Calendar, History, Car, Loader2 } from "lucide-react";
+import { Calendar, History, Car, Loader2, Users } from "lucide-react";
 import { useApp } from "@/components/app-context";
 import { RideCard } from "@/components/ride-card";
 import { getMyRides } from "@/lib/actions/ride.actions";
 
 export default function MyRidesPage() {
-  // NEW: Grab the user so we can check their permanent base role
-  const { user, cancelRide, addNotification } = useApp();
-  const baseRole = user?.role || "both";
+  // 1. Pull the ACTIVE App Mode, entirely ignoring their permanent database role
+  const { activeRole, cancelRide, addNotification } = useApp();
+  const isDriverMode = activeRole === "driver";
   
   // Database States
   const [liveUpcomingRides, setLiveUpcomingRides] = useState<any[]>([]);
   const [liveOfferedRides, setLiveOfferedRides] = useState<any[]>([]);
-  const [livePastRides, setLivePastRides] = useState<any[]>([]);
+  const [livePastBooked, setLivePastBooked] = useState<any[]>([]);
+  const [livePastOffered, setLivePastOffered] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // NEW: Default the starting tab based on their permanent role
+  // Default the starting tab based on their active role
   const [tab, setTab] = useState<"upcoming" | "past" | "offered">(
-    baseRole === "driver" ? "offered" : "upcoming"
+    isDriverMode ? "offered" : "upcoming"
   );
+
+  // If they switch roles globally, force the tab to correct itself
+  useEffect(() => {
+    if (activeRole === "driver" && tab === "upcoming") setTab("offered");
+    if (activeRole === "passenger" && tab === "offered") setTab("upcoming");
+  }, [activeRole, tab]);
 
   useEffect(() => {
     const fetchLiveRides = async () => {
@@ -29,14 +36,11 @@ export default function MyRidesPage() {
         const data = await getMyRides();
         const now = new Date();
 
-        // Data formatter to match your RideCard component exactly
         const formatRide = (ride: any) => {
-          // 1. Convert DB Date ("2024-03-08" -> "Mar 8")
           const [year, month, day] = ride.date.split('-');
           const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
           const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-          // 2. Convert DB Time ("14:30" -> "2:30 PM")
           const [hours, minutes] = ride.time.split(':');
           const hourNum = parseInt(hours, 10);
           const ampm = hourNum >= 12 ? 'PM' : 'AM';
@@ -53,11 +57,8 @@ export default function MyRidesPage() {
             driverAvatar: ride.driver?.photo || "/default-avatar.png",
             rating: ride.driver?.rating || 5.0,
             price: ride.price,
-            
-            // Put the newly formatted strings into the UI
             departureTime: displayTime, 
             date: displayDate,          
-            
             seatsLeft: ride.availableSeats,
             totalSeats: ride.totalSeats,
             status: ride.status,
@@ -69,38 +70,35 @@ export default function MyRidesPage() {
         const formattedOffered = data.offeredRides.map(formatRide);
         const formattedBooked = data.bookedRides.map(formatRide);
 
-        // Sort Booked Rides into Upcoming vs Past
         const upcoming: any[] = [];
-        const past: any[] = [];
-
+        const pastBooked: any[] = [];
         formattedBooked.forEach((ride: any) => {
           if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
-            past.push(ride);
+            pastBooked.push(ride);
           } else {
             upcoming.push(ride);
           }
         });
 
-        // Also add past offered rides to the "Past" tab
+        const activeOffered: any[] = [];
+        const pastOffered: any[] = [];
         formattedOffered.forEach((ride: any) => {
             if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
-                if(!past.find(p => p.id === ride.id)) past.push(ride);
+               pastOffered.push(ride);
+            } else {
+               activeOffered.push(ride);
             }
         });
 
-        // Keep only future/active offered rides in the Offered tab
-        const activeOffered = formattedOffered.filter((ride: any) => ride.rawDate >= now && ride.status !== "cancelled" && ride.status !== "completed");
-
-        // 1. Sort Upcoming & Offered: Soonest rides at the top (Ascending)
         upcoming.sort((a: any, b: any) => a.rawDate.getTime() - b.rawDate.getTime());
         activeOffered.sort((a: any, b: any) => a.rawDate.getTime() - b.rawDate.getTime());
-
-        // 2. Sort Past: Most recently completed rides at the top (Descending)
-        past.sort((a: any, b: any) => b.rawDate.getTime() - a.rawDate.getTime());
+        pastBooked.sort((a: any, b: any) => b.rawDate.getTime() - a.rawDate.getTime());
+        pastOffered.sort((a: any, b: any) => b.rawDate.getTime() - a.rawDate.getTime());
 
         setLiveUpcomingRides(upcoming);
         setLiveOfferedRides(activeOffered);
-        setLivePastRides(past);
+        setLivePastBooked(pastBooked);
+        setLivePastOffered(pastOffered);
 
       } catch (error) {
         console.error("Failed to load rides:", error);
@@ -113,31 +111,34 @@ export default function MyRidesPage() {
     fetchLiveRides();
   }, [addNotification]);
 
-  // NEW: Dynamically build the tabs based on baseRole
-  const tabs = [
-    ...(baseRole === "passenger" || baseRole === "both"
-      ? [{ key: "upcoming" as const, label: "Upcoming", icon: Calendar, count: liveUpcomingRides.length }]
-      : []),
-    ...(baseRole === "driver" || baseRole === "both"
-      ? [{ key: "offered" as const, label: "Offered", icon: Car, count: liveOfferedRides.length }]
-      : []),
-    { key: "past" as const, label: "Past", icon: History, count: livePastRides.length },
+  // 2. STRICTLY build the tabs based on the active role only
+  const tabs = isDriverMode ? [
+    { key: "offered" as const, label: "Offered", icon: Car, count: liveOfferedRides.length },
+    { key: "past" as const, label: "Past", icon: History, count: livePastOffered.length },
+  ] : [
+    { key: "upcoming" as const, label: "Upcoming", icon: Calendar, count: liveUpcomingRides.length },
+    { key: "past" as const, label: "Past", icon: History, count: livePastBooked.length },
   ];
 
-  // Safely fallback if the current tab isn't valid for their role
   const validKeys = tabs.map((t) => t.key);
   const activeTab = validKeys.includes(tab) ? tab : validKeys[0];
 
+  // 3. Ensure the past tab shows the right history based on role
   const currentRides =
-    activeTab === "upcoming" ? liveUpcomingRides : activeTab === "offered" ? liveOfferedRides : livePastRides;
+    activeTab === "upcoming" ? liveUpcomingRides : 
+    activeTab === "offered" ? liveOfferedRides : 
+    (isDriverMode ? livePastOffered : livePastBooked);
 
   return (
     <div className="min-h-full bg-background pt-16 pb-24">
       <div className="max-w-lg mx-auto px-4">
+        
+        {/* Dynamic Header Badge */}
         <div className="flex items-center justify-between pt-4 pb-2">
           <h1 className="text-2xl font-bold">My Rides</h1>
-          <span className="px-2.5 py-1 rounded-full bg-[#00C9B1]/10 text-[#00C9B1] text-[11px] font-semibold capitalize">
-            {baseRole === "both" ? "Driver & Passenger" : baseRole}
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[8px] font-bold uppercase tracking-wider ${isDriverMode ? "bg-[#1A3C6E]/10 text-[#1A3C6E] dark:bg-[#00C9B1]/10 dark:text-[#00C9B1]" : "bg-[#00C9B1]/10 text-[#00C9B1]"}`}>
+            {isDriverMode ? <Car className="w-3.5 h-3.5" /> : <Users className="w-3.5 h-3.5" />}
+            {activeRole} Mode
           </span>
         </div>
 
@@ -149,20 +150,14 @@ export default function MyRidesPage() {
               onClick={() => setTab(t.key)}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[13px] font-medium transition-all ${
                 activeTab === t.key
-                  ? "bg-card text-foreground shadow-sm"
+                  ? "bg-card text-foreground shadow-sm border border-border/50"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
               <t.icon className="w-4 h-4" />
               <span className="hidden sm:inline">{t.label}</span>
               {t.count > 0 && (
-                <span
-                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
-                    activeTab === t.key
-                      ? "bg-[#00C9B1] text-white"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
+                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${activeTab === t.key ? "bg-[#00C9B1] text-white" : "bg-muted text-muted-foreground"}`}>
                   {t.count}
                 </span>
               )}
@@ -188,7 +183,7 @@ export default function MyRidesPage() {
               />
             ))
           ) : (
-            <EmptyState tab={activeTab} />
+            <EmptyState tab={activeTab} isDriverMode={isDriverMode} />
           )}
         </div>
       </div>
@@ -196,21 +191,21 @@ export default function MyRidesPage() {
   );
 }
 
-function EmptyState({ tab }: { tab: string }) {
+function EmptyState({ tab, isDriverMode }: { tab: string, isDriverMode: boolean }) {
   const messages: Record<string, { title: string; sub: string }> = {
     upcoming: { title: "No upcoming rides", sub: "Book a ride from the home screen" },
     offered: { title: "No offered rides", sub: "Start sharing rides with fellow students" },
-    past: { title: "No past rides", sub: "Your completed rides will appear here" },
+    past: { title: "No past rides", sub: isDriverMode ? "Rides you have driven will appear here" : "Rides you have taken will appear here" },
   };
   const m = messages[tab] || messages.upcoming;
 
   return (
     <div className="text-center py-16">
       <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
-        <Car className="w-8 h-8 text-muted-foreground/40" />
+        {isDriverMode ? <Car className="w-8 h-8 text-muted-foreground/40" /> : <Users className="w-8 h-8 text-muted-foreground/40" />}
       </div>
-      <p className="font-medium text-muted-foreground">{m.title}</p>
-      <p className="text-[13px] text-muted-foreground/60 mt-1">{m.sub}</p>
+      <p className="font-medium text-foreground">{m.title}</p>
+      <p className="text-[13px] text-muted-foreground mt-1 max-w-[200px] mx-auto">{m.sub}</p>
     </div>
   );
 }
