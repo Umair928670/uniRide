@@ -5,6 +5,8 @@ import RideRequest from "../models/request.model";
 import Ride from "../models/ride.model";
 import { getLoggedInUser } from "./user.actions";
 import Pusher from "pusher";
+import {auth} from "@clerk/nextjs/server";
+import User from "../models/user.model";
 
 // Initialize Pusher Server
 const pusherServer = new Pusher({
@@ -151,5 +153,68 @@ export async function cancelRideRequest(rideId: string) {
     return { success: true, wasAccepted: previousStatus === "accepted" };
   } catch (error: any) {
     throw new Error(error.message || "Failed to cancel ride");
+  }
+}
+
+
+export async function cancelRideBooking(rideId: string) {
+  try {
+    await connectToDatabase();
+
+    // 1. Authenticate the current user (the passenger cancelling)
+    const { userId: clerkId } = await auth();
+    if (!clerkId) throw new Error("Unauthorized");
+
+    const user = await User.findOne({ clerkId });
+    if (!user) throw new Error("User not found");
+
+    const ride = await Ride.findById(rideId);
+    if (!ride) throw new Error("Ride not found");
+
+    // 2. Find their active request for this ride
+    const request = await RideRequest.findOne({
+      ride: rideId,
+      passenger: user._id,
+      status: { $in: ["pending", "accepted"] }
+    });
+
+    if (!request) {
+      throw new Error("No active booking found to cancel.");
+    }
+
+    const wasAccepted = request.status === "accepted";
+
+    // 3. Mark the request as cancelled
+    request.status = "cancelled";
+    await request.save();
+
+    // 4. If they were already accepted, we must free up the seat and remove them from the car
+    if (wasAccepted) {
+      // Remove passenger from the ride's passenger array
+      ride.passengers = ride.passengers.filter(
+        (passengerId: any) => passengerId.toString() !== user._id.toString()
+      );
+      
+      // Give the seat back
+      ride.availableSeats += 1;
+      await ride.save();
+
+      // Remove the ride from the user's bookedRides history (optional, depending on if you want to keep a history of cancelled rides)
+      // user.bookedRides = user.bookedRides.filter((id: any) => id.toString() !== rideId.toString());
+      // await user.save();
+    }
+
+    // 5. Fire the Real-Time Notification to the Driver
+    // This tells the driver's screen to instantly remove the passenger and add +1 to available seats
+    await pusherServer.trigger(`ride-${rideId}`, "passenger-cancelled", {
+      passengerId: user._id.toString(),
+      passengerName: user.firstName,
+      wasAccepted: wasAccepted
+    });
+
+    return JSON.parse(JSON.stringify({ success: true, message: "Ride cancelled successfully" }));
+  } catch (error: any) {
+    console.error("Error cancelling ride:", error);
+    throw new Error(error.message || "Failed to cancel ride booking.");
   }
 }

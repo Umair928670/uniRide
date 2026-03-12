@@ -1,25 +1,71 @@
 'use client';
 
-import { Suspense, useState, useMemo, useEffect } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { ArrowLeft, SlidersHorizontal, Search, X, MapPin, Loader2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import { RideCard } from "@/components/ride-card";
-import { getAvailableRides } from "@/lib/actions/ride.actions";
 import dynamic from "next/dynamic";
+// 1. IMPORT SWR
+import useSWR from "swr";
 
 const MapView = dynamic(() => import('@/components/map-view').then(mod => mod.MapView ), { 
-  ssr: false 
+  ssr: false,
+  loading: () => <div className="w-full h-full bg-muted animate-pulse rounded-2xl flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-[#00C9B1]" /></div>
 });
+
+// 2. THE SWR FETCHER
+const fetchAvailableRides = async () => {
+  const { getAvailableRides } = await import("@/lib/actions/ride.actions");
+  const data = await getAvailableRides();
+
+  // Format data exactly as before so it matches RideCard
+  return data.map((ride: any) => {
+    const [year, month, day] = ride.date.split('-');
+    const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
+    const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    const [hours, minutes] = ride.time.split(':');
+    const hourNum = parseInt(hours, 10);
+    const ampm = hourNum >= 12 ? 'PM' : 'AM';
+    const formattedHour = hourNum % 12 || 12;
+    const displayTime = `${formattedHour}:${minutes} ${ampm}`;
+
+    return {
+      id: ride._id,
+      from: ride.origin,
+      to: ride.destination,
+      fromCoords: [ride.originCoords.lat, ride.originCoords.lng],
+      toCoords: [ride.destinationCoords.lat, ride.destinationCoords.lng],
+      driverName: `${ride.driver?.firstName || "Unknown"} ${ride.driver?.lastName || ""}`.trim(),
+      driverAvatar: ride.driver?.photo || "/default-avatar.png",
+      rating: ride.driver?.rating || 5.0,
+      price: ride.price,
+      departureTime: displayTime, 
+      date: displayDate,          
+      seatsLeft: ride.availableSeats,
+      totalSeats: ride.totalSeats,
+      status: ride.status,
+      rawDate: new Date(ride.departureTime),
+      driverId: ride.driver?._id || ride.driver
+    };
+  });
+};
 
 function SearchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isDarkMode } = useApp(); 
-  
-  // Real-time Database States
-  const [liveRides, setLiveRides] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+
+  // 3. THE SWR ENGINE
+  // Fetches available rides. We check frequently (every 10s) because rides fill up fast!
+  const { data: liveRides = [], isLoading, error } = useSWR('availableRides', fetchAvailableRides, {
+    revalidateOnFocus: true, 
+    dedupingInterval: 5000,
+    refreshInterval: 10000, // Check for new rides every 10 seconds
+  });
+
+  if (error) console.error("Failed to fetch rides:", error);
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState(
@@ -30,67 +76,9 @@ function SearchContent() {
   const [timeFilter, setTimeFilter] = useState<"all" | "morning" | "afternoon" | "evening">("all");
   const [showMap, setShowMap] = useState(false);
 
-  // 1. Fetch live rides and format them to match the UI perfectly
-  const fetchRides = async () => {
-    setIsLoading(true);
-    try {
-      // Fetch all available future rides from MongoDB
-      const data = await getAvailableRides();
-      
-      
-
-      // Data formatter to match your RideCard component exactly
-        const formattedRides = data.map((ride: any) => {
-          // 1. Convert DB Date ("2024-03-08" -> "Mar 8")
-          const [year, month, day] = ride.date.split('-');
-          const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-          const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-          // 2. Convert DB Time ("14:30" -> "2:30 PM")
-          const [hours, minutes] = ride.time.split(':');
-          const hourNum = parseInt(hours, 10);
-          const ampm = hourNum >= 12 ? 'PM' : 'AM';
-          const formattedHour = hourNum % 12 || 12;
-          const displayTime = `${formattedHour}:${minutes} ${ampm}`;
-
-          return {
-            id: ride._id,
-            from: ride.origin,
-            to: ride.destination,
-            fromCoords: [ride.originCoords.lat, ride.originCoords.lng],
-            toCoords: [ride.destinationCoords.lat, ride.destinationCoords.lng],
-            driverName: `${ride.driver?.firstName || "Unknown"} ${ride.driver?.lastName || ""}`.trim(),
-            driverAvatar: ride.driver?.photo || "/default-avatar.png",
-            rating: ride.driver?.rating || 5.0,
-            price: ride.price,
-            
-            // Put the newly formatted strings into the UI
-            departureTime: displayTime, 
-            date: displayDate,          
-            
-            seatsLeft: ride.availableSeats,
-            totalSeats: ride.totalSeats,
-            status: ride.status,
-            rawDate: new Date(ride.departureTime),
-            driverId: ride.driver?._id || ride.driver
-          };
-        });
-
-      setLiveRides(formattedRides);
-    } catch (error) {
-      console.error("Failed to fetch rides", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchRides();
-  }, []);
-
-  // 2. Client-side filtering now uses 'liveRides' instead of mock data
+  // 4. Client-side filtering (Instantly filters the SWR cache)
   const filteredRides = useMemo(() => {
-    return liveRides.filter((ride) => {
+    return liveRides.filter((ride: any) => {
       // Word-level matching against ride's from, to, and driver name
       const words = searchQuery
         .toLowerCase()
@@ -126,7 +114,7 @@ function SearchContent() {
 
   const mapMarkers = useMemo(() => {
     const m: { position: [number, number]; type: "start" | "end" | "user" | "default" }[] = [];
-    filteredRides.forEach((ride) => {
+    filteredRides.forEach((ride: any) => {
       if (ride.fromCoords) m.push({ position: ride.fromCoords, type: "start" });
       if (ride.toCoords) m.push({ position: ride.toCoords, type: "end" });
     });
@@ -176,7 +164,7 @@ function SearchContent() {
 
           {/* Filters */}
           {showFilters && (
-            <div className="space-y-3 pb-3">
+            <div className="space-y-3 pb-3 animate-in slide-in-from-top-2">
               <div>
                 <p className="text-[12px] text-muted-foreground mb-1.5">Price Range</p>
                 <div className="flex gap-2 flex-wrap">
@@ -238,7 +226,7 @@ function SearchContent() {
 
       {/* Map View */}
       {showMap && !isLoading && (
-        <div className="max-w-lg mx-auto w-full px-4 pt-3">
+        <div className="max-w-lg mx-auto w-full px-4 pt-3 animate-in fade-in">
           <div className="h-64 sm:h-80 rounded-2xl overflow-hidden border border-border">
             <MapView
              center={filteredRides.length > 0 && filteredRides[0].fromCoords ? [filteredRides[0].fromCoords[0], filteredRides[0].fromCoords[1]] : [33.6844, 73.0479]}
@@ -254,20 +242,37 @@ function SearchContent() {
       {/* Results */}
       <div className="max-w-lg mx-auto w-full px-4 pt-3 pb-24 space-y-3 flex-1">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <Loader2 className="w-8 h-8 animate-spin mb-3 text-[#00C9B1]" />
-            <p>Loading available rides...</p>
+          // 5. SKELETON LOADER
+          <div className="space-y-3 pt-2">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="w-full h-[140px] rounded-3xl bg-card border border-border animate-pulse flex flex-col p-4">
+                 <div className="flex items-center justify-between mb-4">
+                   <div className="flex gap-3">
+                      <div className="w-12 h-12 rounded-full bg-muted" />
+                      <div className="space-y-2">
+                        <div className="w-24 h-3 rounded bg-muted" />
+                        <div className="w-16 h-2 rounded bg-muted" />
+                      </div>
+                   </div>
+                   <div className="w-16 h-6 rounded-full bg-muted" />
+                 </div>
+                 <div className="w-3/4 h-3 rounded bg-muted mb-2" />
+                 <div className="w-1/2 h-3 rounded bg-muted" />
+              </div>
+            ))}
           </div>
         ) : filteredRides.length > 0 ? (
-          filteredRides.map((ride) => (
-            <RideCard key={ride.id} ride={ride} />
+          filteredRides.map((ride: any) => (
+            <div key={ride.id} className="animate-in fade-in slide-in-from-bottom-2">
+               <RideCard ride={ride} />
+            </div>
           ))
         ) : (
-          <div className="text-center py-16">
+          <div className="text-center py-16 animate-in fade-in">
             <Search className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-muted-foreground">No rides found</p>
-            <p className="text-[13px] text-muted-foreground/60 mt-1">
-              Try adjusting your search or filters
+            <p className="font-semibold text-foreground">No rides found</p>
+            <p className="text-[13px] text-muted-foreground mt-1 max-w-[250px] mx-auto">
+              Try adjusting your search criteria or changing the filters to see more results.
             </p>
           </div>
         )}

@@ -13,8 +13,30 @@ export default function ProfilePage() {
 
   const baseRole = user?.role || "both";
 
+  // SKELETON LOADER FOR PROFILE PAGE
   if (!user) {
-    return <div className="p-8 text-center text-muted-foreground">Loading profile...</div>;
+    return (
+      <div className="min-h-full bg-background pt-16 pb-24 animate-pulse">
+        <div className="max-w-lg mx-auto px-4">
+          <div className="pt-4 pb-6 flex flex-col items-center">
+            <div className="w-24 h-24 rounded-3xl bg-muted mb-4" />
+            <div className="w-32 h-6 bg-muted rounded-full mb-2" />
+            <div className="w-24 h-4 bg-muted rounded-full mb-2" />
+            <div className="w-40 h-3 bg-muted rounded-full" />
+          </div>
+          
+          <div className="bg-card rounded-2xl shadow-sm border border-border p-4 mb-6 h-36" />
+          
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="bg-card rounded-2xl shadow-sm border border-border p-4 h-24" />
+            <div className="bg-card rounded-2xl shadow-sm border border-border p-4 h-24" />
+            <div className="bg-card rounded-2xl shadow-sm border border-border p-4 h-24" />
+          </div>
+
+          <div className="bg-card rounded-2xl shadow-sm border border-border h-64" />
+        </div>
+      </div>
+    );
   }
 
   const unreadCount = appNotifications.filter((n) => !n.read).length;
@@ -31,7 +53,7 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-full bg-background pt-16 pb-24">
-      <div className="max-w-lg mx-auto px-4">
+      <div className="max-w-lg mx-auto px-4 animate-in fade-in duration-300">
         {/* Profile Header */}
         <div className="pt-4 pb-6 text-center">
           <div className="relative w-24 h-24 mx-auto mb-4">

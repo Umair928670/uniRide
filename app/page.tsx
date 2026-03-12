@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useMemo, useEffect } from "react";
-// NEW: Added the 'Car' icon for the Driver Dashboard
 import { MapPin, Circle, Home, GraduationCap, ArrowRight, Star, Search, ChevronUp, Navigation, X, Loader2, Plus, Bookmark, Edit2, Car } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import dynamic from 'next/dynamic';
 import Pusher from "pusher-js";
-import { getActiveRide } from "@/lib/actions/ride.actions";
 import { updateUser } from "@/lib/actions/user.actions";
+// 1. IMPORT SWR
+import useSWR from "swr";
 
 type MarkerType = "start" | "end" | "user" | "default";
 
@@ -22,21 +22,34 @@ type MapViewProps = {
   className?: string;
 };
 
+// 2. ADD A SKELETON LOADER TO THE MAP FOR PERCEIVED SPEED
 const MapView = dynamic<MapViewProps>(
   () => import('@/components/map-view').then((mod) => mod.MapView),
-  { ssr: false }
+  { 
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-full bg-[#E5E3DF] dark:bg-[#1A1A1A] flex flex-col items-center justify-center animate-pulse">
+        <Loader2 className="w-8 h-8 animate-spin text-[#00C9B1] mb-2" />
+        <p className="text-muted-foreground text-[13px] font-medium tracking-wide">Connecting to GPS...</p>
+      </div>
+    )
+  }
 );
 
 const DEFAULT_LOCATION: [number, number] = [33.6844, 73.0479];
 
+// 3. SWR FETCHER FOR ACTIVE RIDE
+const fetchActiveRide = async () => {
+  const { getActiveRide } = await import("@/lib/actions/ride.actions");
+  return getActiveRide();
+};
+
 export default function HomePage() {
   const router = useRouter();
   
-  const { user, availableRides, isDarkMode, updateProfile, addNotification, activeRole } = useApp();
+  const { user, isDarkMode, updateProfile, addNotification, activeRole } = useApp();
   const savedPlaces = user?.savedPlaces || [];
   
-  // --- NEW: INTELLIGENT ROLE DETECTION ---
-  // If their database role is 'driver' OR they toggled into driver mode, adapt the UI!
   const isDriverMode = user?.role === "driver" || activeRole === "driver";
   
   const customSavedPlaces = savedPlaces.filter((p: any) => {
@@ -53,7 +66,6 @@ export default function HomePage() {
   const [sheetOpen, setSheetOpen] = useState(true);
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
-  const [activeRide, setActiveRide] = useState<any>(null);
   const [liveLocation, setLiveLocation] = useState<{ lat: number, lng: number } | null>(null);
 
   const [showSavedPlacesList, setShowSavedPlacesList] = useState(false);
@@ -65,6 +77,14 @@ export default function HomePage() {
   const [addressSuggestions, setAddressSuggestions] = useState<any[]>([]);
   const [showAddressSuggestions, setShowAddressSuggestions] = useState(false);
   const [roadRoute, setRoadRoute] = useState<[number, number][]>([]);
+
+  // 4. THE SWR ENGINE FOR THE HOME PAGE
+  // Automatically handles fetching, caching, and background refreshing
+  const { data: activeRide, isLoading: isRideLoading } = useSWR('activeRide', fetchActiveRide, {
+    revalidateOnFocus: true, // Re-check if they open the app to see if a driver accepted
+    dedupingInterval: 5000,  // Prevents spamming the DB
+    refreshInterval: 15000,  // Poll every 15 seconds safely
+  });
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -105,14 +125,7 @@ export default function HomePage() {
     return () => clearTimeout(delay);
   }, [newPlaceAddress, newPlaceCoords]);
 
-  useEffect(() => {
-    const checkActiveRide = async () => {
-      const ride = await getActiveRide();
-      if (ride) setActiveRide(ride);
-    };
-    checkActiveRide();
-  }, []);
-
+  // Fetch Road Route (OSRM)
   useEffect(() => {
     if (!activeRide) return;
     const fetchRoadRoute = async () => {
@@ -131,6 +144,7 @@ export default function HomePage() {
     fetchRoadRoute();
   }, [activeRide]);
 
+  // Pusher for Live Tracking
   useEffect(() => {
     if (!activeRide) return;
     const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
@@ -278,8 +292,17 @@ export default function HomePage() {
 
   return (
     <div className="relative w-full h-full overflow-hidden">
-      {activeRide && (
-        <div className="absolute top-20 left-4 right-4 z-50 bg-[#1A3C6E] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center cursor-pointer" onClick={() => router.push(`/ride/${activeRide._id}`)}>
+      {/* 5. ADDED LOADING SKELETON FOR ACTIVE RIDE BANNER */}
+      {isRideLoading ? (
+        <div className="absolute top-20 left-4 right-4 z-50 bg-card border border-border p-4 rounded-2xl shadow-lg flex justify-between items-center animate-pulse">
+          <div className="space-y-2">
+            <div className="w-24 h-3 rounded bg-muted"></div>
+            <div className="w-40 h-4 rounded bg-muted"></div>
+          </div>
+          <div className="w-8 h-8 rounded-full bg-muted"></div>
+        </div>
+      ) : activeRide ? (
+        <div className="absolute top-20 left-4 right-4 z-50 bg-[#1A3C6E] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center cursor-pointer hover:bg-[#1A3C6E]/90 transition-colors" onClick={() => router.push(`/ride/${activeRide._id}`)}>
            <div>
              <p className="text-xs text-[#00C9B1] font-bold tracking-wider uppercase mb-1">Ride in Progress</p>
              <p className="font-medium text-sm">Heading to {activeRide.destination}</p>
@@ -288,7 +311,7 @@ export default function HomePage() {
              <ArrowRight className="w-4 h-4 text-white" />
            </div>
         </div>
-      )}
+      ) : null}
       
       <div className="absolute inset-0 z-0">
         <MapView
@@ -329,7 +352,6 @@ export default function HomePage() {
           
           {/* --- THE ROLE-AWARE SPLIT UI --- */}
           {!isDriverMode && (
-            /* 2. PASSENGER SEARCH (Standard Find Ride flow) */
             <div className="px-5 pt-4 pb-28 space-y-4">
               <div className="relative">
                 <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#00C9B1]" />

@@ -1,139 +1,154 @@
 'use client';
 
-import { useState, useEffect } from "react";
-import { Calendar, History, Car, Loader2, Users } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { Calendar, History, Car, Users } from "lucide-react";
 import { useApp } from "@/components/app-context";
 import { RideCard } from "@/components/ride-card";
-import { getMyRides } from "@/lib/actions/ride.actions";
+import useSWR from "swr";
+
+const fetcher = async () => {
+  const { getMyRides } = await import("@/lib/actions/ride.actions");
+  return getMyRides();
+};
 
 export default function MyRidesPage() {
-  // 1. Pull the ACTIVE App Mode, entirely ignoring their permanent database role
-  const { activeRole, cancelRide, addNotification } = useApp();
+  const { activeRole, addNotification } = useApp(); // Notice we removed cancelRide from here!
   const isDriverMode = activeRole === "driver";
   
-  // Database States
-  const [liveUpcomingRides, setLiveUpcomingRides] = useState<any[]>([]);
-  const [liveOfferedRides, setLiveOfferedRides] = useState<any[]>([]);
-  const [livePastBooked, setLivePastBooked] = useState<any[]>([]);
-  const [livePastOffered, setLivePastOffered] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Default the starting tab based on their active role
   const [tab, setTab] = useState<"upcoming" | "past" | "offered">(
     isDriverMode ? "offered" : "upcoming"
   );
 
-  // If they switch roles globally, force the tab to correct itself
   useEffect(() => {
     if (activeRole === "driver" && tab === "upcoming") setTab("offered");
     if (activeRole === "passenger" && tab === "offered") setTab("upcoming");
   }, [activeRole, tab]);
 
-  useEffect(() => {
-    const fetchLiveRides = async () => {
-      setIsLoading(true);
-      try {
-        const data = await getMyRides();
-        const now = new Date();
+  // Grab 'mutate' from SWR so we can manipulate the cache
+  const { data, isLoading, error, mutate } = useSWR('myRides', fetcher, {
+    revalidateOnFocus: false, 
+    dedupingInterval: 10000,  
+    refreshInterval: 15000,   
+  });
 
-        const formatRide = (ride: any) => {
-          const [year, month, day] = ride.date.split('-');
-          const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-          const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (error) {
+    console.error(error);
+    addNotification("warning", "Failed to load your rides.");
+  }
 
-          const [hours, minutes] = ride.time.split(':');
-          const hourNum = parseInt(hours, 10);
-          const ampm = hourNum >= 12 ? 'PM' : 'AM';
-          const formattedHour = hourNum % 12 || 12;
-          const displayTime = `${formattedHour}:${minutes} ${ampm}`;
+  // --- THE NEW CANCELLATION ENGINE ---
+  const handleCancelRide = async (rideId: string) => {
+    // 1. Optimistic UI: Instantly remove the ride from the screen so the user doesn't wait
+    mutate((currentData: any) => {
+      if (!currentData) return currentData;
+      return {
+        ...currentData,
+        bookedRides: currentData.bookedRides.filter((r: any) => r._id !== rideId)
+      };
+    }, false);
 
-          return {
-            id: ride._id,
-            from: ride.origin,
-            to: ride.destination,
-            fromCoords: [ride.originCoords.lat, ride.originCoords.lng],
-            toCoords: [ride.destinationCoords.lat, ride.destinationCoords.lng],
-            driverName: `${ride.driver?.firstName || "Unknown"} ${ride.driver?.lastName || ""}`.trim(),
-            driverAvatar: ride.driver?.photo || "/default-avatar.png",
-            rating: ride.driver?.rating || 5.0,
-            price: ride.price,
-            departureTime: displayTime, 
-            date: displayDate,          
-            seatsLeft: ride.availableSeats,
-            totalSeats: ride.totalSeats,
-            status: ride.status,
-            rawDate: new Date(ride.departureTime),
-            driverId: ride.driver?._id || ride.driver
-          };
-        };
+    try {
+      // 2. Talk to the actual database
+      const { cancelRideBooking } = await import("@/lib/actions/request.actions");
+      await cancelRideBooking(rideId);
+      
+      addNotification("info", "Ride cancelled successfully.");
+      
+      // 3. Re-sync with the database just to be 100% sure
+      mutate();
+    } catch (error: any) {
+      // If the database fails, put the ride back on the screen
+      addNotification("warning", error.message || "Failed to cancel ride.");
+      mutate(); 
+    }
+  };
 
-        const formattedOffered = data.offeredRides.map(formatRide);
-        const formattedBooked = data.bookedRides.map(formatRide);
+  const processedRides = useMemo(() => {
+    if (!data) return { upcoming: [], offered: [], pastBooked: [], pastOffered: [] };
 
-        const upcoming: any[] = [];
-        const pastBooked: any[] = [];
-        formattedBooked.forEach((ride: any) => {
-          if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
-            pastBooked.push(ride);
-          } else {
-            upcoming.push(ride);
-          }
-        });
+    const now = new Date();
+    const upcoming: any[] = [];
+    const activeOffered: any[] = [];
+    const pastBooked: any[] = [];
+    const pastOffered: any[] = [];
 
-        const activeOffered: any[] = [];
-        const pastOffered: any[] = [];
-        formattedOffered.forEach((ride: any) => {
-            if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
-               pastOffered.push(ride);
-            } else {
-               activeOffered.push(ride);
-            }
-        });
+    const formatRide = (ride: any) => {
+      const [year, month, day] = ride.date.split('-');
+      const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
+      const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-        upcoming.sort((a: any, b: any) => a.rawDate.getTime() - b.rawDate.getTime());
-        activeOffered.sort((a: any, b: any) => a.rawDate.getTime() - b.rawDate.getTime());
-        pastBooked.sort((a: any, b: any) => b.rawDate.getTime() - a.rawDate.getTime());
-        pastOffered.sort((a: any, b: any) => b.rawDate.getTime() - a.rawDate.getTime());
-
-        setLiveUpcomingRides(upcoming);
-        setLiveOfferedRides(activeOffered);
-        setLivePastBooked(pastBooked);
-        setLivePastOffered(pastOffered);
-
-      } catch (error) {
-        console.error("Failed to load rides:", error);
-        addNotification("warning", "Failed to load your rides.");
-      } finally {
-        setIsLoading(false);
-      }
+      const [hours, minutes] = ride.time.split(':');
+      const hourNum = parseInt(hours, 10);
+      const ampm = hourNum >= 12 ? 'PM' : 'AM';
+      const formattedHour = hourNum % 12 || 12;
+      
+      return {
+        id: ride._id,
+        from: ride.origin,
+        to: ride.destination,
+        fromCoords: [ride.originCoords.lat, ride.originCoords.lng],
+        toCoords: [ride.destinationCoords.lat, ride.destinationCoords.lng],
+        driverName: `${ride.driver?.firstName || "Unknown"} ${ride.driver?.lastName || ""}`.trim(),
+        driverAvatar: ride.driver?.photo || "/default-avatar.png",
+        rating: ride.driver?.rating || 5.0,
+        price: ride.price,
+        departureTime: `${formattedHour}:${minutes} ${ampm}`, 
+        date: displayDate,          
+        seatsLeft: ride.availableSeats,
+        totalSeats: ride.totalSeats,
+        status: ride.status,
+        rawDate: new Date(ride.departureTime),
+        driverId: ride.driver?._id || ride.driver
+      };
     };
 
-    fetchLiveRides();
-  }, [addNotification]);
+    data.bookedRides?.forEach((rawRide: any) => {
+      const ride = formatRide(rawRide);
+      if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
+        pastBooked.push(ride);
+      } else {
+        upcoming.push(ride);
+      }
+    });
 
-  // 2. STRICTLY build the tabs based on the active role only
+    data.offeredRides?.forEach((rawRide: any) => {
+      const ride = formatRide(rawRide);
+      if (ride.rawDate < now || ride.status === "completed" || ride.status === "cancelled") {
+        pastOffered.push(ride);
+      } else {
+        activeOffered.push(ride);
+      }
+    });
+
+    upcoming.sort((a, b) => a.rawDate.getTime() - b.rawDate.getTime());
+    activeOffered.sort((a, b) => a.rawDate.getTime() - b.rawDate.getTime());
+    pastBooked.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
+    pastOffered.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
+
+    return { upcoming, activeOffered, pastBooked, pastOffered };
+  }, [data]);
+
   const tabs = isDriverMode ? [
-    { key: "offered" as const, label: "Offered", icon: Car, count: liveOfferedRides.length },
-    { key: "past" as const, label: "Past", icon: History, count: livePastOffered.length },
+    { key: "offered" as const, label: "Offered", icon: Car, count: (processedRides.activeOffered ?? []).length },
+    { key: "past" as const, label: "Past", icon: History, count: (processedRides.pastOffered ?? []).length },
   ] : [
-    { key: "upcoming" as const, label: "Upcoming", icon: Calendar, count: liveUpcomingRides.length },
-    { key: "past" as const, label: "Past", icon: History, count: livePastBooked.length },
+    { key: "upcoming" as const, label: "Upcoming", icon: Calendar, count: processedRides.upcoming.length },
+    { key: "past" as const, label: "Past", icon: History, count: processedRides.pastBooked.length },
   ];
 
   const validKeys = tabs.map((t) => t.key);
   const activeTab = validKeys.includes(tab) ? tab : validKeys[0];
 
-  // 3. Ensure the past tab shows the right history based on role
-  const currentRides =
-    activeTab === "upcoming" ? liveUpcomingRides : 
-    activeTab === "offered" ? liveOfferedRides : 
-    (isDriverMode ? livePastOffered : livePastBooked);
+  const currentRides = (
+    activeTab === "upcoming" ? processedRides.upcoming : 
+    activeTab === "offered" ? processedRides.activeOffered : 
+    (isDriverMode ? processedRides.pastOffered : processedRides.pastBooked)
+  ) ?? [];
 
   return (
     <div className="min-h-full bg-background pt-16 pb-24">
       <div className="max-w-lg mx-auto px-4">
         
-        {/* Dynamic Header Badge */}
         <div className="flex items-center justify-between pt-4 pb-2">
           <h1 className="text-2xl font-bold">My Rides</h1>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[8px] font-bold uppercase tracking-wider ${isDriverMode ? "bg-[#1A3C6E]/10 text-[#1A3C6E] dark:bg-[#00C9B1]/10 dark:text-[#00C9B1]" : "bg-[#00C9B1]/10 text-[#00C9B1]"}`}>
@@ -142,8 +157,7 @@ export default function MyRidesPage() {
           </span>
         </div>
 
-        {/* Tabs */}
-        <div className="flex bg-[#F5F7FA] dark:bg-[#1C2333] rounded-2xl p-1 mb-5">
+        <div className="flex bg-[#f2f5fc] dark:bg-[#1C2333] rounded-2xl p-1 mb-5">
           {tabs.map((t) => (
             <button
               key={t.key}
@@ -165,12 +179,25 @@ export default function MyRidesPage() {
           ))}
         </div>
 
-        {/* Ride List */}
         <div className="space-y-3">
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                <Loader2 className="w-8 h-8 animate-spin mb-4 text-[#00C9B1]" />
-                <p>Loading your rides...</p>
+            <div className="space-y-3 pt-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="w-full h-[180px] rounded-3xl bg-card border border-border animate-pulse flex flex-col p-4">
+                   <div className="flex items-center justify-between mb-4">
+                     <div className="flex gap-3">
+                        <div className="w-12 h-12 rounded-full bg-muted" />
+                        <div className="space-y-2">
+                          <div className="w-24 h-3 rounded bg-muted" />
+                          <div className="w-16 h-2 rounded bg-muted" />
+                        </div>
+                     </div>
+                     <div className="w-16 h-6 rounded-full bg-muted" />
+                   </div>
+                   <div className="w-3/4 h-3 rounded bg-muted mb-2" />
+                   <div className="w-1/2 h-3 rounded bg-muted" />
+                </div>
+              ))}
             </div>
           ) : currentRides.length > 0 ? (
             currentRides.map((ride) => (
@@ -179,7 +206,7 @@ export default function MyRidesPage() {
                 ride={ride}
                 isPast={activeTab === "past"}
                 isBooked={activeTab === "upcoming"}
-                onCancel={activeTab === "upcoming" ? cancelRide : undefined}
+                onCancel={activeTab === "upcoming" ? handleCancelRide : undefined} // Updated!
               />
             ))
           ) : (
@@ -200,11 +227,11 @@ function EmptyState({ tab, isDriverMode }: { tab: string, isDriverMode: boolean 
   const m = messages[tab] || messages.upcoming;
 
   return (
-    <div className="text-center py-16">
-      <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
+    <div className="text-center py-16 animate-in fade-in duration-500">
+      <div className="w-16 h-16 rounded-3xl bg-muted flex items-center justify-center mx-auto mb-4">
         {isDriverMode ? <Car className="w-8 h-8 text-muted-foreground/40" /> : <Users className="w-8 h-8 text-muted-foreground/40" />}
       </div>
-      <p className="font-medium text-foreground">{m.title}</p>
+      <p className="font-semibold text-[16px] text-foreground">{m.title}</p>
       <p className="text-[13px] text-muted-foreground mt-1 max-w-[200px] mx-auto">{m.sub}</p>
     </div>
   );

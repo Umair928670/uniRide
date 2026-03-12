@@ -3,7 +3,7 @@
 import Pusher from "pusher-js";
 import { broadcastLocation } from "@/lib/actions/location.actions";
 import { useState, useMemo, useEffect } from "react";
-import { ArrowLeft, Star, MapPin, Clock, Users, MessageCircle, Check, X, Phone, CheckCircle, Loader2, PhoneOutgoing } from "lucide-react";
+import { ArrowLeft, Star, MapPin, Clock, Users, MessageCircle, Check, X, Phone, CheckCircle, Loader2, PhoneOutgoing, Car } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
 import { useApp } from "@/components/app-context";
 import { ImageWithFallback } from "@/components/figma/ImageWithFallback";
@@ -11,6 +11,47 @@ import { MapView } from "@/components/map-view";
 import { getRideById, updateRideStatus } from "@/lib/actions/ride.actions";
 import { createRideRequest, checkMyRequestStatus, getPendingRequestsForRide, respondToRequest } from "@/lib/actions/request.actions";
 import { sendIncomingCallSignal } from "@/lib/actions/call.actions";
+// 1. IMPORT SWR
+import useSWR from "swr";
+
+// 2. THE COMBINED SWR FETCHER
+// This grabs the Ride, your Request Status, and Pending Requests all at once!
+const fetchRideData = async ([_, rideId, userId]: [string, string, string | undefined]) => {
+  const dbRide = await getRideById(rideId);
+  if (!dbRide) throw new Error("Ride not found");
+
+  const formattedRide = {
+    id: dbRide._id,
+    driverId: dbRide.driver?._id || dbRide.driver,
+    from: dbRide.origin,
+    to: dbRide.destination,
+    fromCoords: [dbRide.originCoords.lat, dbRide.originCoords.lng],
+    toCoords: [dbRide.destinationCoords.lat, dbRide.destinationCoords.lng],
+    driverName: `${dbRide.driver?.firstName} ${dbRide.driver?.lastName}`.trim(),
+    driverAvatar: dbRide.driver?.photo || "/default-avatar.png",
+    rating: dbRide.driver?.rating || 5.0,
+    verified: dbRide.driver?.isDriverVerified,
+    price: dbRide.price,
+    departureTime: dbRide.time,
+    date: dbRide.date,
+    seatsLeft: dbRide.availableSeats,
+    totalSeats: dbRide.totalSeats,
+    passengers: dbRide.passengers || [],
+  };
+
+  let pendingRequests: any[] = [];
+  let requestStatus: string | null = null;
+  let isAlreadyBooked = false;
+
+  if (userId && formattedRide.driverId.toString() === userId.toString()) {
+    pendingRequests = await getPendingRequestsForRide(dbRide._id);
+  } else if (userId) {
+    requestStatus = await checkMyRequestStatus(dbRide._id);
+    if (requestStatus === "accepted") isAlreadyBooked = true;
+  }
+
+  return { formattedRide, pendingRequests, requestStatus, isAlreadyBooked };
+};
 
 export default function RideDetailPage() {
   const router = useRouter();
@@ -18,75 +59,43 @@ export default function RideDetailPage() {
 
   const { user, isDarkMode, addNotification, startTracking, stopTracking, isBroadcasting, liveLocation } = useApp();
 
-  const [ride, setRide] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isBooking, setIsBooking] = useState(false);
-  const [isAlreadyBooked, setIsAlreadyBooked] = useState(false);
-  const [requestStatus, setRequestStatus] = useState<string | null>(null);
+  
+  // 3. THE SWR ENGINE
+  // Notice we pass the user._id in the key array so it refetches if the user changes
+  const { data, isLoading, mutate } = useSWR(
+    id && user !== undefined ? ['rideDetail', id as string, user?._id] : null,
+    fetchRideData,
+    {
+      revalidateOnFocus: false, // Let Pusher handle the real-time updates safely
+      dedupingInterval: 5000,
+    }
+  );
 
+  // Extract the cached data cleanly
+  const ride = data?.formattedRide;
+  const pendingRequests = data?.pendingRequests || [];
+  const requestStatus = data?.requestStatus || null;
+  const isAlreadyBooked = data?.isAlreadyBooked || false;
+  const isOwnRide = user && ride && (user._id?.toString() === ride.driverId?.toString());
+
+  // UI & High-Frequency GPS States (These stay out of SWR!)
+  const [isBooking, setIsBooking] = useState(false);
   const [driverLocation, setDriverLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [passengerLocations, setPassengerLocations] = useState<Record<string, { lat: number, lng: number }>>({});
 
   const [showChat, setShowChat] = useState(false);
-  const [chatMessage, setChatMessage] = useState("");
-  const [chatMessages, setChatMessages] = useState<{ sender: string; text: string; time: string }[]>([]);
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [showCallModal, setShowCallModal] = useState(false);
-
   const [incomingCall, setIncomingCall] = useState<{ callerName: string, roomId: string } | null>(null);
 
-  useEffect(() => {
-    const fetchRideDetails = async () => {
-      try {
-        const dbRide = await getRideById(id as string);
-        const formattedRide = {
-          id: dbRide._id,
-          driverId: dbRide.driver?._id || dbRide.driver,
-          from: dbRide.origin,
-          to: dbRide.destination,
-          fromCoords: [dbRide.originCoords.lat, dbRide.originCoords.lng],
-          toCoords: [dbRide.destinationCoords.lat, dbRide.destinationCoords.lng],
-          driverName: `${dbRide.driver?.firstName} ${dbRide.driver?.lastName}`.trim(),
-          driverAvatar: dbRide.driver?.photo || "/default-avatar.png",
-          rating: dbRide.driver?.rating || 5.0,
-          verified: dbRide.driver?.isDriverVerified,
-          price: dbRide.price,
-          departureTime: dbRide.time,
-          date: dbRide.date,
-          seatsLeft: dbRide.availableSeats,
-          totalSeats: dbRide.totalSeats,
-          passengers: dbRide.passengers || [],
-        };
-        setRide(formattedRide);
-
-        if (user && user._id && dbRide.driver?._id.toString() === user._id.toString()) {
-          const reqs = await getPendingRequestsForRide(dbRide._id);
-          setPendingRequests(reqs);
-        }
-
-        const status = await checkMyRequestStatus(dbRide._id);
-        if (status) {
-          setRequestStatus(status);
-          if (status === "accepted") setIsAlreadyBooked(true);
-        }
-      } catch (error) {
-        addNotification("warning", "Failed to load ride details.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    if (id) fetchRideDetails();
-  }, [id, user, addNotification]);
-
-  const isOwnRide = user && ride && (user._id?.toString() === ride.driverId?.toString());
-
+  // --- ACTIONS ---
   const handleRequest = async () => {
-    if (ride.seatsLeft <= 0) return addNotification("warning", "No seats available for this ride.");
+    if (!ride || ride.seatsLeft <= 0) return addNotification("warning", "No seats available for this ride.");
     setIsBooking(true);
     try {
       await createRideRequest(ride.id, ride.driverId);
-      setRequestStatus("pending");
+      // OPTIMISTIC UI: Update SWR cache instantly so the button turns to "Pending" without waiting!
+      mutate((prev: any) => prev ? { ...prev, requestStatus: "pending" } : prev, false);
       addNotification("success", "Request sent to the driver for approval!");
     } catch (error: any) {
       addNotification("warning", error.message || "Failed to send request.");
@@ -95,6 +104,33 @@ export default function RideDetailPage() {
     }
   };
 
+  const handleRespondToRequest = async (requestId: string, action: "accept" | "decline") => {
+    try {
+      await respondToRequest(requestId, action);
+      
+      // OPTIMISTIC UI: Instantly remove the request and deduct a seat if accepted!
+      mutate((prev: any) => {
+        if (!prev) return prev;
+        const newRide = { ...prev.formattedRide };
+        if (action === "accept") newRide.seatsLeft -= 1;
+        return {
+          ...prev,
+          formattedRide: newRide,
+          pendingRequests: prev.pendingRequests.filter((req: any) => req._id !== requestId)
+        };
+      }, false);
+
+      if (action === "accept") {
+        addNotification("success", "Passenger accepted!");
+      } else {
+        addNotification("info", "Passenger declined.");
+      }
+    } catch (error: any) {
+      addNotification("warning", error.message || "Something went wrong.");
+    }
+  };
+
+  // --- PUSHER REAL-TIME WEB SOCKETS ---
   useEffect(() => {
     if (!ride?.id || (!isOwnRide && !isAlreadyBooked && requestStatus !== "pending")) return;
     if (!process.env.NEXT_PUBLIC_PUSHER_KEY || !process.env.NEXT_PUBLIC_PUSHER_CLUSTER) return; 
@@ -105,48 +141,65 @@ export default function RideDetailPage() {
     
     const channel = pusher.subscribe(`ride-${ride.id}`);
 
-    // --- BULLETPROOF INCOMING CALL LISTENER ---
-    channel.bind("incoming-call", (data: { targetUserId: string, callerName: string, roomId: string }) => {
-      console.log("🔔 RAW SIGNAL RECEIVED:", data);
-      console.log("🔍 MY CURRENT USER ID:", user?._id);
-
-      // We forcefully convert both to strings so MongoDB ObjectIds don't fail the === check
-      if (user && user._id?.toString() === data.targetUserId?.toString()) {
-        console.log("✅ ID MATCH! Ringing phone now...");
-        setIncomingCall({ callerName: data.callerName, roomId: data.roomId });
+    // Call Listener
+    channel.bind("incoming-call", (payload: { targetUserId: string, callerName: string, roomId: string }) => {
+      if (user && user._id?.toString() === payload.targetUserId?.toString()) {
+        setIncomingCall({ callerName: payload.callerName, roomId: payload.roomId });
       }
     });
-    // ------------------------------------------
 
     if (isOwnRide) {
-      channel.bind("passenger-update", (data: { userId: string, lat: number, lng: number }) => {
-        setPassengerLocations(prev => ({ ...prev, [data.userId]: { lat: data.lat, lng: data.lng } }));
+      channel.bind("passenger-update", (payload: { userId: string, lat: number, lng: number }) => {
+        setPassengerLocations(prev => ({ ...prev, [payload.userId]: { lat: payload.lat, lng: payload.lng } }));
       });
-      channel.bind("new-request", (data: any) => {
-        setPendingRequests(prev => [...prev, data]);
-        addNotification("info", `New ride request from ${data.passenger.firstName}!`);
+      
+      channel.bind("new-request", (payload: any) => {
+        // PUSHER MUTATION: Drop the new passenger into the SWR pending list instantly
+        mutate((prev: any) => prev ? { ...prev, pendingRequests: [...prev.pendingRequests, payload] } : prev, false);
+        addNotification("info", `New ride request from ${payload.passenger.firstName}!`);
       });
-      channel.bind("passenger-cancelled", (data: { passengerId: string, passengerName: string, wasAccepted: boolean }) => {
-        addNotification("warning", `${data.passengerName} cancelled their ride.`);
-        if (data.wasAccepted) {
-          setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft + 1 }));
-          setPassengerLocations(prev => { const newLocs = { ...prev }; delete newLocs[data.passengerId]; return newLocs; });
-        } else {
-          setPendingRequests(prev => prev.filter(req => req.passenger._id.toString() !== data.passengerId));
+
+      channel.bind("passenger-cancelled", (payload: { passengerId: string, passengerName: string, wasAccepted: boolean }) => {
+        addNotification("warning", `${payload.passengerName} cancelled their ride.`);
+        // PUSHER MUTATION: Give the seat back instantly!
+        mutate((prev: any) => {
+          if (!prev) return prev;
+          const newRide = { ...prev.formattedRide };
+          let newReqs = [...prev.pendingRequests];
+          if (payload.wasAccepted) {
+            newRide.seatsLeft += 1;
+          } else {
+            newReqs = newReqs.filter(req => req.passenger._id.toString() !== payload.passengerId);
+          }
+          return { ...prev, formattedRide: newRide, pendingRequests: newReqs };
+        }, false);
+
+        if (payload.wasAccepted) {
+          setPassengerLocations(prev => { const newLocs = { ...prev }; delete newLocs[payload.passengerId]; return newLocs; });
         }
       });
     } else {
-      channel.bind("driver-update", (data: { lat: number, lng: number }) => {
-        setDriverLocation(data);
+      channel.bind("driver-update", (payload: { lat: number, lng: number }) => {
+        setDriverLocation(payload);
       });
-      channel.bind("request-status-update", (data: { passengerId: string, status: string }) => {
-        if (user && user._id && data.passengerId === user._id.toString()) {
-          setRequestStatus(data.status);
-          if (data.status === "accepted") {
-            setIsAlreadyBooked(true); 
-            setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft - 1 })); 
+      
+      channel.bind("request-status-update", (payload: { passengerId: string, status: string }) => {
+        if (user && user._id && payload.passengerId === user._id.toString()) {
+          // PUSHER MUTATION: Update my UI based on the driver's response
+          mutate((prev: any) => {
+            if (!prev) return prev;
+            const newRide = { ...prev.formattedRide };
+            let newBooked = prev.isAlreadyBooked;
+            if (payload.status === "accepted") {
+              newBooked = true;
+              newRide.seatsLeft -= 1;
+            }
+            return { ...prev, formattedRide: newRide, requestStatus: payload.status, isAlreadyBooked: newBooked };
+          }, false);
+
+          if (payload.status === "accepted") {
             addNotification("success", "Your ride request was ACCEPTED!");
-          } else if (data.status === "declined") {
+          } else if (payload.status === "declined") {
             addNotification("warning", "Your ride request was DECLINED by the driver.");
           }
         }
@@ -158,11 +211,12 @@ export default function RideDetailPage() {
       pusher.unsubscribe(`ride-${ride.id}`);
       pusher.disconnect();
     };
-  }, [ride?.id, isOwnRide, isAlreadyBooked, requestStatus, user, addNotification]);
+  }, [ride?.id, isOwnRide, isAlreadyBooked, requestStatus, user, addNotification, mutate]);
 
+  // GPS Watcher
   useEffect(() => {
     let watchId: number;
-    if (!isOwnRide && isAlreadyBooked && "geolocation" in navigator) {
+    if (!isOwnRide && isAlreadyBooked && ride?.id && "geolocation" in navigator) {
       watchId = navigator.geolocation.watchPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
@@ -193,50 +247,27 @@ export default function RideDetailPage() {
     return markers;
   }, [ride, driverLocation, passengerLocations, myLocation, liveLocation, isOwnRide, isAlreadyBooked]);
 
-  const routePoints = useMemo(() => {
-    if (!ride) return [];
+ const routePoints = useMemo<[number, number][] | undefined>(() => {
+    if (!ride || !ride.fromCoords || !ride.toCoords) return undefined;
+    
     const midLat = (ride.fromCoords[0] + ride.toCoords[0]) / 2 + 0.003;
     const midLng = (ride.fromCoords[1] + ride.toCoords[1]) / 2 - 0.002;
-    return [ride.fromCoords, [midLat, midLng] as [number, number], ride.toCoords];
+    
+    return [
+      [ride.fromCoords[0], ride.fromCoords[1]],
+      [midLat, midLng],
+      [ride.toCoords[0], ride.toCoords[1]]
+    ];
   }, [ride]);
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-[#00C9B1] mb-4" />
-        <p className="text-muted-foreground">Loading ride details...</p>
-      </div>
-    );
-  }
-
-  if (!ride) return <div className="min-h-full bg-background flex items-center justify-center"><p className="text-muted-foreground">Ride not found</p></div>;
-
-  const handleRespondToRequest = async (requestId: string, action: "accept" | "decline") => {
-    try {
-      await respondToRequest(requestId, action);
-      setPendingRequests((prev) => prev.filter((req) => req._id !== requestId));
-      if (action === "accept") {
-        setRide((prev: any) => ({ ...prev, seatsLeft: prev.seatsLeft - 1 }));
-        addNotification("success", "Passenger accepted!");
-      } else {
-        addNotification("info", "Passenger declined.");
-      }
-    } catch (error: any) {
-      addNotification("warning", error.message || "Something went wrong.");
-    }
-  };
-
- // --- BULLETPROOF CALL INITIATION ---
   const handleInitiateCall = async () => {
+    if (!ride) return;
     if (isOwnRide) {
       if (ride.passengers.length === 0) {
         addNotification("info", "No booked passengers to call yet.");
       } else if (ride.passengers.length === 1) {
-        // Safely extract the ID whether MongoDB returned a full object or just a string
         const pass = ride.passengers[0];
         const passId = pass?._id || pass;
-        
-        // Use String() wrapper instead of .toString() to absolutely prevent crashes
         const passIdStr = String(passId);
         const rideIdStr = String(ride.id);
         const roomId = `${rideIdStr}_${passIdStr}`;
@@ -247,7 +278,6 @@ export default function RideDetailPage() {
         setShowCallModal(true);
       }
     } else if (isAlreadyBooked) {
-      // Use String() wrapper here too
       const rideIdStr = String(ride.id);
       const myIdStr = String(user?._id || "");
       const driverIdStr = String(ride.driverId || "");
@@ -262,7 +292,7 @@ export default function RideDetailPage() {
   };
 
   const handleDriverCallsSpecificPassenger = async (passengerId: string, passengerName: string) => {
-    // Completely crash-proof ID conversions
+    if (!ride) return;
     const passIdStr = String(passengerId);
     const rideIdStr = String(ride.id);
     const roomId = `${rideIdStr}_${passIdStr}`;
@@ -270,7 +300,34 @@ export default function RideDetailPage() {
     await sendIncomingCallSignal(rideIdStr, passIdStr, ride.driverName, roomId);
     router.push(`/call/${roomId}`);
   };
-  // ----------------------------------
+
+  // The Communication Lock:
+  const canCommunicate = isOwnRide ? ride?.passengers?.length > 0 : isAlreadyBooked;
+  
+  // --- SKELETON LOADER ---
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background pb-24 animate-pulse">
+        <div className="relative h-56 sm:h-72 bg-muted flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+        </div>
+        <div className="max-w-lg mx-auto px-4 -mt-6 relative z-10 space-y-4">
+          <div className="bg-card rounded-2xl shadow-lg border border-border p-5">
+            <div className="flex gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-muted shrink-0" />
+              <div className="flex-1 space-y-2 mt-2">
+                <div className="w-32 h-4 bg-muted rounded" />
+                <div className="w-20 h-3 bg-muted rounded" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-card rounded-2xl shadow-sm border border-border p-5 h-32" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!ride) return <div className="min-h-full bg-background flex items-center justify-center"><p className="text-muted-foreground">Ride not found</p></div>;
 
   return (
     <div className="min-h-full bg-background pb-24">
@@ -285,7 +342,7 @@ export default function RideDetailPage() {
       </div>
 
       <div className="max-w-lg mx-auto px-4 -mt-6 relative z-10">
-        <div className="bg-card rounded-2xl shadow-lg border border-border p-5 mb-4">
+        <div className="bg-card rounded-2xl shadow-lg border border-border p-5 mb-4 animate-in fade-in slide-in-from-bottom-2">
           <div className="flex items-center gap-4">
             <div className="relative shrink-0">
               <ImageWithFallback src={ride.driverAvatar} alt={ride.driverName} className="w-16 h-16 rounded-2xl object-cover" />
@@ -325,13 +382,13 @@ export default function RideDetailPage() {
 
         {/* PENDING REQUESTS DASHBOARD */}
         {isOwnRide && pendingRequests.length > 0 && (
-          <div className="bg-card rounded-2xl shadow-sm border border-border p-5 mb-4">
+          <div className="bg-card rounded-2xl shadow-sm border border-border p-5 mb-4 animate-in fade-in">
             <h3 className="font-semibold mb-3 flex items-center justify-between">
               Pending Requests
               <span className="bg-[#f59e0b] text-white text-xs px-2 py-0.5 rounded-full">{pendingRequests.length}</span>
             </h3>
             <div className="space-y-3">
-              {pendingRequests.map((req) => (
+              {pendingRequests.map((req: any) => (
                 <div key={req._id} className="flex items-center justify-between bg-[#F5F7FA] dark:bg-[#1C2333] p-3 rounded-xl border border-border">
                   <div className="flex items-center gap-3">
                     <ImageWithFallback src={req.passenger.photo || "/default-avatar.png"} alt="Passenger" className="w-10 h-10 rounded-full object-cover" />
@@ -378,18 +435,44 @@ export default function RideDetailPage() {
             <button
               onClick={async () => {
                 if (isBroadcasting) {
+                  // --- END RIDE ---
                   stopTracking(); 
                   await updateRideStatus(ride.id, "completed");
-                  addNotification("info", "Live tracking stopped.");
+                  
+                  // Instantly update UI cache
+                  mutate((prev: any) => prev ? { 
+                    ...prev, 
+                    formattedRide: { ...prev.formattedRide, status: "completed" } 
+                  } : prev, false);
+
+                  addNotification("success", "Ride completed successfully!");
+                  router.push("/my-rides"); // Take them back to their rides list
                 } else {
+                  // --- START RIDE ---
                   startTracking(ride.id); 
                   await updateRideStatus(ride.id, "active");
-                  addNotification("success", "Ride started! Location is live.");
+
+                  // Instantly update UI cache
+                  mutate((prev: any) => prev ? { 
+                    ...prev, 
+                    formattedRide: { ...prev.formattedRide, status: "active" } 
+                  } : prev, false);
+
+                  addNotification("success", "Ride started! Passengers can now track you.");
                 }
               }}
-              className={`flex-1 py-3.5 rounded-2xl font-semibold flex items-center justify-center gap-2 transition-all shadow-sm ${isBroadcasting ? "bg-red-500/10 text-red-500 hover:bg-red-500/20" : "bg-[#00C9B1]/10 text-[#00C9B1] hover:bg-[#00C9B1]/20"}`}
+              // Make "Start Ride" look like a primary button, and "End Ride" look like a definitive stop action
+              className={`flex-1 py-3.5 rounded-2xl font-semibold flex items-center justify-center gap-2 transition-all shadow-lg ${
+                isBroadcasting 
+                  ? "bg-red-500 text-white hover:bg-red-600 shadow-red-500/25" 
+                  : "bg-[#00C9B1] text-white hover:bg-[#00C9B1]/90 shadow-[#00C9B1]/25"
+              }`}
             >
-              {isBroadcasting ? <><MapPin className="w-5 h-5 animate-pulse" /> Stop Tracking</> : <><MapPin className="w-5 h-5" /> Share Live Location</>}
+              {isBroadcasting ? (
+                <><CheckCircle className="w-5 h-5" /> End Ride</>
+              ) : (
+                <><Car className="w-5 h-5 animate-pulse" /> Start Ride</>
+              )}
             </button>
           ) : requestStatus === "pending" ? (
             <div className="flex-1 py-3.5 rounded-2xl bg-[#f59e0b]/10 text-[#f59e0b] font-semibold flex items-center justify-center gap-2 border border-[#f59e0b]/20">
@@ -413,13 +496,29 @@ export default function RideDetailPage() {
             </button>
           )}
 
-          <button onClick={() => setShowChat(!showChat)} className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-colors ${showChat ? "bg-[#00C9B1] text-white" : "bg-[#00C9B1]/10 text-[#00C9B1] hover:bg-[#00C9B1]/20"}`}>
+          <button 
+            onClick={() => setShowChat(!showChat)} 
+            disabled={!canCommunicate}
+            className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-colors ${
+              !canCommunicate 
+                ? "bg-muted text-muted-foreground opacity-40 cursor-not-allowed" 
+                : showChat 
+                  ? "bg-[#00C9B1] text-white shadow-lg shadow-[#00C9B1]/20" 
+                  : "bg-[#00C9B1]/10 text-[#00C9B1] hover:bg-[#00C9B1]/20"
+            }`}
+          >
             <MessageCircle className="w-5 h-5" />
           </button>
           
+          {/* Call Button */}
           <button 
             onClick={handleInitiateCall} 
-            className="w-14 h-14 rounded-2xl bg-[#1A3C6E]/10 text-[#1A3C6E] dark:text-white flex items-center justify-center hover:bg-[#1A3C6E]/20 transition-colors"
+            disabled={!canCommunicate}
+            className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-colors ${
+              !canCommunicate 
+                ? "bg-muted text-muted-foreground opacity-40 cursor-not-allowed" 
+                : "bg-[#1A3C6E]/10 text-[#1A3C6E] dark:text-white hover:bg-[#1A3C6E]/20"
+            }`}
           >
             <Phone className="w-5 h-5" />
           </button>
