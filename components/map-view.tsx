@@ -59,28 +59,48 @@ export function MapView({
     };
   }, [routePoints]);
 
-  // 3. AUTO-FIT: In Ride Details, make the map show the whole route automatically
-  useEffect(() => {
-    if (mapRef.current && routePoints && routePoints.length >= 2) {
-      const lats = routePoints.map(p => p[0]);
-      const lngs = routePoints.map(p => p[1]);
-      const minLng = Math.min(...lngs);
-      const minLat = Math.min(...lats);
-      const maxLng = Math.max(...lngs);
-      const maxLat = Math.max(...lats);
+  // 3. SMART AUTO-FIT: Prevents map from resetting user zoom when live data arrives
+  const routeDestinationStr = useMemo(() => {
+    return routePoints && routePoints.length > 0
+      ? JSON.stringify(routePoints[routePoints.length - 1])
+      : null;
+  }, [routePoints]);
+  
+  const centerStr = JSON.stringify(validCenter);
+  const hasFittedRoute = useRef<string | null>(null);
 
-      mapRef.current.fitBounds(
-        [[minLng, minLat], [maxLng, maxLat]],
-        { padding: 40, duration: 1000 }
-      );
-    } else if (mapRef.current) {
-      mapRef.current.flyTo({
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+
+    // SCENARIO A: We have a route (Ride Details / Offer Ride)
+    if (routePoints && routePoints.length >= 2) {
+      // ONLY fit bounds if this is a completely new destination. 
+      // If the car is just moving along the same route, leave the camera alone!
+      if (routeDestinationStr !== hasFittedRoute.current) {
+        hasFittedRoute.current = routeDestinationStr;
+
+        const lats = routePoints.map(p => p[0]);
+        const lngs = routePoints.map(p => p[1]);
+
+        map.fitBounds(
+          [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+          { padding: 40, duration: 1000 }
+        );
+      }
+    } 
+    // SCENARIO B: Following the driver or user center (Home Page)
+    else {
+      // Smoothly slide to the new location, but PRESERVE the user's custom zoom level!
+      const currentZoom = map.getZoom(); 
+      
+      map.flyTo({
         center: [validCenter[0], validCenter[1]],
-        zoom: zoom,
-        duration: 1000
+        zoom: currentZoom > 0 ? currentZoom : zoom, // The Magic Fix ✨
+        duration: 800
       });
     }
-  }, [validCenter, zoom, routePoints]);
+  }, [routeDestinationStr, centerStr, routePoints, validCenter, zoom]);
 
   const mapStyle = darkMode
     ? "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"

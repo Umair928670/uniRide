@@ -1,7 +1,7 @@
 'use client';
 
 import { useAuth } from "@clerk/nextjs";
-import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from "react";
+import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useMemo } from "react";
 import { Ride, MOCK_RIDES, PAST_RIDES, AVATARS } from "./mock-data";
 import { broadcastLocation } from "@/lib/actions/location.actions"; 
 import { useRouter } from "next/navigation";
@@ -147,14 +147,7 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [user, setUser] = useState<UserProfile>(initialUser);
-  
-  // const [activeRole, setActiveRole] = useState<UserRole>(() => {
-  //   if (typeof window !== "undefined") {
-  //     const saved = localStorage.getItem("uniRide_activeMode");
-  //     if (saved) return saved as UserRole;
-  //   }
-  //   return initialUser?.role === "both" ? "passenger" : (initialUser?.role || "passenger");
-  // });
+
 
   const [activeRole, setActiveRole] = useState<UserRole>(
     initialUser?.role === "both" ? "passenger" : (initialUser?.role || "passenger")
@@ -224,31 +217,34 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
     }
   }, []);
 
-  // 2. Updated Start Tracking: Save to disk
-  const startTracking = (rideId: string) => {
-    localStorage.setItem("uniRide_active_tracking", rideId);
+ // 1. Wrap startTracking in useCallback so it doesn't get recreated every millisecond
+  const startTracking = useCallback((rideId: string) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("uniRide_active_tracking", rideId);
+    }
     setActiveTrackingRideId(rideId);
     setIsBroadcasting(true);
-  };
+  }, []);
 
-  // 3. Updated Stop Tracking: Remove from disk
-  const stopTracking = () => {
-    localStorage.removeItem("uniRide_active_tracking");
+  // 2. Wrap stopTracking in useCallback
+  const stopTracking = useCallback(() => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("uniRide_active_tracking");
+    }
     setActiveTrackingRideId(null);
     setIsBroadcasting(false);
     setLiveLocation(null);
-  };
+  }, []);
 
-  // 4. The Global Tracking Engine
+  // 3. The Global Tracking Engine
   useEffect(() => {
     let watchId: number;
     
-    // Only track if we are broadcasting AND we know which ride to attach it to
     if (isBroadcasting && activeTrackingRideId && "geolocation" in navigator) {
       watchId = navigator.geolocation.watchPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
-          setLiveLocation({ lat: latitude, lng: longitude }); // <--- TELLS THE APP WHERE THE CAR IS
+          setLiveLocation({ lat: latitude, lng: longitude }); 
           broadcastLocation(activeTrackingRideId, latitude, longitude, "driver"); 
         },
         (error) => console.error("Global GPS Error:", error),
@@ -261,13 +257,13 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
     };
   }, [isBroadcasting, activeTrackingRideId]);
 
-  const savedPlaces = [
+  // 4. Wrap arrays in useMemo so React doesn't rebuild them on every frame!
+  const savedPlaces = useMemo(() => [
     { label: "Home", address: "123 Oak Street", lat: 37.78, lng: -122.42 },
     { label: "University", address: "Stanford Campus", lat: 37.4275, lng: -122.1697 },
     { label: "Gym", address: "FitLife Center", lat: 37.79, lng: -122.41 },
-  ];
+  ], []);
 
-  // ... (Your other standard context functions like addNotification, login, logout remain identical here)
   const addNotification = useCallback((type: Notification["type"], message: string) => {
     const id = Date.now().toString() + Math.random().toString(36).slice(2);
     setNotifications((prev) => [...prev, { id, type, message, timestamp: Date.now() }]);
@@ -394,45 +390,54 @@ export function AppProvider({ children, initialUser }: AppProviderProps) {
     setSettings((prev) => ({ ...prev, ...updates }));
   }, []);
 
+  // 5. THE ULTIMATE SPEED FIX: Wrap the entire export in a useMemo.
+  // This stops the BottomNav, Profile, and other pages from redrawing unless their specific data changes.
+  const contextValue = useMemo(() => ({
+    isLoggedIn,
+    user,
+    activeRole,
+    isDriverVerified: !!(user?.driverLicenseImage && user?.vehiclePicture && user?.vehicleInfo),
+    availableRides,
+    myUpcomingRides,
+    myPastRides,
+    offeredRides,
+    notifications,
+    appNotifications,
+    isDarkMode,
+    settings,
+    savedPlaces,  
+    isBroadcasting,
+    activeTrackingRideId,
+    liveLocation,
+    startTracking,
+    stopTracking,
+    login,
+    logout,
+    requestRide,
+    cancelRide,
+    offerRide,
+    addNotification,
+    dismissNotification,
+    toggleDarkMode,
+    switchRole,
+    updateProfile,
+    updateVehicle,
+    updateSettings,
+    markNotificationRead,
+    markAllNotificationsRead,
+    clearAllAppNotifications,
+    deleteAppNotification,
+  }), [
+    isLoggedIn, user, activeRole, availableRides, myUpcomingRides, myPastRides, offeredRides,
+    notifications, appNotifications, isDarkMode, settings, savedPlaces, isBroadcasting,
+    activeTrackingRideId, liveLocation, startTracking, stopTracking, login, logout,
+    requestRide, cancelRide, offerRide, addNotification, dismissNotification, toggleDarkMode,
+    switchRole, updateProfile, updateVehicle, updateSettings, markNotificationRead,
+    markAllNotificationsRead, clearAllAppNotifications, deleteAppNotification
+  ]);
+
   return (
-    <AppContext.Provider
-      value={{
-        isLoggedIn,
-        user,
-        activeRole,
-        isDriverVerified: !!(user?.driverLicenseImage && user?.vehiclePicture && user?.vehicleInfo),
-        availableRides,
-        myUpcomingRides,
-        myPastRides,
-        offeredRides,
-        notifications,
-        appNotifications,
-        isDarkMode,
-        settings,
-        savedPlaces,  
-        isBroadcasting,
-        activeTrackingRideId,
-        liveLocation, // <--- EXPORTED SO THE MAP CAN SEE IT
-        startTracking,
-        stopTracking,
-        login,
-        logout,
-        requestRide,
-        cancelRide,
-        offerRide,
-        addNotification,
-        dismissNotification,
-        toggleDarkMode,
-        switchRole,
-        updateProfile,
-        updateVehicle,
-        updateSettings,
-        markNotificationRead,
-        markAllNotificationsRead,
-        clearAllAppNotifications,
-        deleteAppNotification,
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );
