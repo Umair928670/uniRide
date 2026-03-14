@@ -49,6 +49,7 @@ export interface UserProfile {
   driverLicenseImage: string | null;
   vehiclePicture: string | null;
   isDriverVerified?: boolean;
+  createdAt?: string;
   savedPlaces?: { label: string; address: string; lat: number; lng: number }[];
 }
 

@@ -2,7 +2,6 @@
 import { OnboardingOverlay } from "@/components/onboarding-overlay";
 import { ClerkProvider } from '@clerk/nextjs';
 import { AppProvider } from "@/components/app-context";
-import { TopBar } from "@/components/top-bar";
 import { BottomNav } from "@/components/bottom-nav";
 import { ToastContainer } from "@/components/toast-container";
 import "./styles/tailwind.css";
@@ -25,7 +24,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <OnboardingOverlay />
             ) : (
           <div className="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
-            <TopBar />
             <main className="flex-1 overflow-y-auto overflow-x-hidden relative">
               {children} {/* Your page content goes here */}
             </main>
